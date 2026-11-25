@@ -158,6 +158,43 @@
   .tile.pop { animation: pop .16s ease; }
   .tile.born { animation: born .12s ease; }
   .tile.gone { opacity: 0; transform: scale(.55); transition: left .12s ease, top .12s ease, opacity .12s ease, transform .12s ease; }
+  #board.fx-slow .tile { transition-duration: .32s; }
+  .beam {
+    position: absolute;
+    height: 4px;
+    border-radius: 99px;
+    background: linear-gradient(90deg, transparent, #ffe08a, #fff);
+    transform-origin: left center;
+    box-shadow: 0 0 12px #ffe08a;
+    z-index: 4;
+  }
+  .spark {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    margin: -4px 0 0 -4px;
+    border-radius: 50%;
+    z-index: 4;
+  }
+  .float {
+    position: absolute;
+    z-index: 5;
+    font-weight: 900;
+    font-size: 28px;
+    color: #fffaf3;
+    -webkit-text-stroke: 6px #c47d00;
+    paint-order: stroke fill;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  body.fever .float { -webkit-text-stroke-color: #c2412d; }
+  .flash {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+  }
+  #effects .tile.ghost { opacity: .5; z-index: 1; }
+  #score.double-pop { animation: pop .42s ease; }
   #splash {
     position: absolute;
     inset: 0;
@@ -379,6 +416,7 @@ const peakEl = document.getElementById("peak");
 const overlayEl = document.getElementById("overlay");
 const overTextEl = document.getElementById("over-text");
 const splashEl = document.getElementById("splash");
+const effectsEl = document.getElementById("effects");
 const rowStripe = document.getElementById("rebel-row");
 const colStripe = document.getElementById("rebel-col");
 
@@ -469,7 +507,16 @@ function diagonalMerge(target, dir, fever) {
     target[vr][vc] = null;
     dead.add(keeper.id);
     dead.add(victim.id);
-    eaten.push([victim.id, keeper.id]);
+    eaten.push({
+      victimId: victim.id,
+      keeperId: keeper.id,
+      value: keeper.value,
+      diagonal: true,
+      fromR: vr,
+      fromC: vc,
+      keeperR: kr,
+      keeperC: kc,
+    });
     gained += keeper.value;
     merges += 1;
   }
@@ -489,7 +536,7 @@ function slideLine(target, coords, fever) {
     if (nxt && !cur.merged && !nxt.merged && cur.value === nxt.value) {
       cur.value = bumped(cur.value, fever);
       cur.merged = true;
-      eaten.push([nxt.id, cur.id]);
+      eaten.push({ victimId: nxt.id, keeperId: cur.id, value: cur.value, diagonal: false });
       out.push(cur);
       gained += cur.value;
       merges += 1;
@@ -526,9 +573,20 @@ function applyMove(src, dir, ctx) {
     for (let c = 0; c < SIZE; c++) if (target[r][c]) at.set(target[r][c].id, { r, c });
   }
   const ghosts = [];
-  for (const [victimId, keeperId] of eaten) {
-    const spot = at.get(keeperId);
-    if (spot) ghosts.push({ id: victimId, r: spot.r, c: spot.c });
+  for (const item of eaten) {
+    const spot = at.get(item.keeperId);
+    if (!spot) continue;
+    ghosts.push({
+      id: item.victimId,
+      r: spot.r,
+      c: spot.c,
+      value: item.value,
+      diagonal: item.diagonal,
+      fromR: item.fromR,
+      fromC: item.fromC,
+      keeperR: item.keeperR,
+      keeperC: item.keeperC,
+    });
   }
   return { board: target, score: gained, merges, changed: sig(src) !== sig(target), ghosts };
 }
@@ -744,6 +802,151 @@ function charge(merges) {
   if (meter >= 100) startEffect();
 }
 
+function point(r, c) {
+  const box = effectsEl.getBoundingClientRect();
+  const size = (box.width - 30) / 4;
+  return {
+    x: c * (size + 10) + size / 2,
+    y: r * (size + 10) + size / 2,
+    size,
+  };
+}
+function clearJuice() {
+  for (const el of [...effectsEl.children]) {
+    if (el.id === "rebel-row" || el.id === "rebel-col" || el.id === "splash") continue;
+    el.remove();
+  }
+}
+function burst(r, c, color) {
+  const spot = point(r, c);
+  for (let i = 0; i < 12; i++) {
+    const spark = document.createElement("i");
+    spark.className = "spark";
+    spark.style.left = `${spot.x}px`;
+    spark.style.top = `${spot.y}px`;
+    spark.style.background = color;
+    effectsEl.appendChild(spark);
+    const angle = (Math.PI * 2 * i) / 12;
+    const dist = 26 + (i % 3) * 10;
+    spark.animate(
+      [
+        { transform: "translate(0,0) scale(1)", opacity: 1 },
+        { transform: `translate(${Math.cos(angle) * dist}px, ${Math.sin(angle) * dist}px) scale(.3)`, opacity: 0 },
+      ],
+      { duration: 520, easing: "ease-out", fill: "forwards" }
+    ).finished.then(() => spark.remove());
+  }
+}
+function floatText(r, c, text) {
+  const spot = point(r, c);
+  const el = document.createElement("div");
+  el.className = "float";
+  el.textContent = text;
+  el.style.left = `${spot.x - spot.size * 0.2}px`;
+  el.style.top = `${spot.y - spot.size * 0.7}px`;
+  effectsEl.appendChild(el);
+  el.animate(
+    [
+      { opacity: 0, transform: "translateY(8px) scale(.8)" },
+      { opacity: 1, transform: "translateY(-4px) scale(1)" },
+      { opacity: 0, transform: "translateY(-26px) scale(1.05)" },
+    ],
+    { duration: 780, easing: "ease-out", fill: "forwards" }
+  ).finished.then(() => el.remove());
+}
+function flashBoard(color) {
+  const el = document.createElement("div");
+  el.className = "flash";
+  el.style.background = color;
+  effectsEl.appendChild(el);
+  el.animate([{ opacity: 0 }, { opacity: 0.55 }, { opacity: 0 }], { duration: 420, easing: "ease-out" })
+    .finished.then(() => el.remove());
+}
+function beam(r1, c1, r2, c2) {
+  const a = point(r1, c1);
+  const b = point(r2, c2);
+  const el = document.createElement("div");
+  el.className = "beam";
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  el.style.width = `${Math.hypot(dx, dy)}px`;
+  el.style.left = `${a.x}px`;
+  el.style.top = `${a.y}px`;
+  el.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+  effectsEl.appendChild(el);
+  el.animate([{ opacity: 0 }, { opacity: 1 }, { opacity: 0 }], { duration: 560, easing: "ease-out", fill: "forwards" })
+    .finished.then(() => el.remove());
+}
+function playJuice(rule, ghosts) {
+  if (!rule || !ghosts) return;
+  if (rule === "boost") {
+    const hits = ghosts.filter((ghost) => ghost.value);
+    if (!hits.length) return;
+    flashBoard("rgba(255, 196, 60, .4)");
+    for (const ghost of hits) {
+      burst(ghost.r, ghost.c, "#ffe08a");
+      floatText(ghost.r, ghost.c, String(ghost.value));
+    }
+  }
+  if (rule === "diagonal") {
+    for (const ghost of ghosts) {
+      if (!ghost.diagonal) continue;
+      beam(ghost.keeperR, ghost.keeperC, ghost.fromR, ghost.fromC);
+      burst(ghost.r, ghost.c, "#fff4c2");
+    }
+  }
+  if (rule === "antigrav") {
+    flashBoard("rgba(255, 80, 40, .28)");
+    floatText(rebel, rebel, "反向");
+  }
+}
+function showDouble() {
+  flashBoard("rgba(255, 210, 80, .35)");
+  floatText(1, 1, "×2");
+  scoreEl.classList.remove("double-pop");
+  void scoreEl.offsetWidth;
+  scoreEl.classList.add("double-pop");
+}
+function showBlank() {
+  const empties = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) if (!board[r][c]) empties.push([r, c]);
+  }
+  if (!empties.length) return;
+  const [r, c] = empties[Math.floor(Math.random() * empties.length)];
+  const el = document.createElement("div");
+  el.className = "tile ghost";
+  const [bg, fg] = tileLook(2);
+  el.textContent = "2";
+  el.style.background = bg;
+  el.style.color = fg;
+  el.style.fontSize = fontSize(2);
+  el.style.left = pos(c);
+  el.style.top = pos(r);
+  el.style.transition = "none";
+  effectsEl.appendChild(el);
+  el.animate(
+    [
+      { opacity: 0.15, transform: "scale(.35)" },
+      { opacity: 0.55, transform: "scale(1)" },
+      { opacity: 0, transform: "scale(1.25)" },
+    ],
+    { duration: 680, easing: "ease-out", fill: "forwards" }
+  ).finished.then(() => el.remove());
+  floatText(r, c, "留白");
+}
+function stampEcho() {
+  for (const el of tilesEl.querySelectorAll(".tile:not(.gone)")) {
+    const ghost = el.cloneNode(true);
+    ghost.classList.add("ghost");
+    ghost.style.transition = "none";
+    effectsEl.appendChild(ghost);
+    ghost.animate([{ opacity: 0.55 }, { opacity: 0 }], { duration: 340, fill: "forwards" })
+      .finished.then(() => ghost.remove());
+  }
+  floatText(0, 3, "回声");
+}
+
 function render(ghosts = []) {
   const ghostAt = new Map(ghosts.map((ghost) => [String(ghost.id), ghost]));
   const alive = new Set();
@@ -850,13 +1053,18 @@ function updateMeter() {
 
 function finishMove(my, merges, effectOn, gained) {
   if (my !== epoch) return;
-  if (effectOn && currentRule === "double") score += gained;
-  if (!(effectOn && currentRule === "blank")) spawn(board);
+  if (effectOn && currentRule === "double" && gained > 0) {
+    score += gained;
+    showDouble();
+  }
+  if (effectOn && currentRule === "blank") showBlank();
+  else spawn(board);
   if (effectOn) spendTurn();
   else charge(merges);
   saveBest();
   checkOver();
   busy = false;
+  boardEl.classList.remove("fx-slow");
   render();
   updateMeter();
   if (over) setStatus(`棋盘满了。得分 ${score}。`);
@@ -889,11 +1097,16 @@ function commitMove(dir) {
   if (!opening.changed) return false;
   const my = epoch;
   const echoDir = effectOn && currentRule === "echo" ? (lastDir || dir) : null;
+  const step = effectOn ? 340 : MOVE_MS;
+  const rule = effectOn ? currentRule : null;
   busy = true;
+  boardEl.classList.toggle("fx-slow", effectOn);
+  clearJuice();
   board = opening.board;
   score += opening.score;
   lastDir = dir;
   render(opening.ghosts);
+  playJuice(rule, opening.ghosts);
   const finish = (merges) => {
     const gained = score - scoreAtStart;
     finishMove(my, merges, effectOn, gained);
@@ -909,14 +1122,15 @@ function commitMove(dir) {
       finish(opening.merges);
       return;
     }
+    stampEcho();
     board = second.board;
     score += second.score;
     render(second.ghosts);
     setTimeout(() => {
       if (my !== epoch) return;
       finish(opening.merges + second.merges);
-    }, MOVE_MS);
-  }, MOVE_MS);
+    }, step);
+  }, step);
   return true;
 }
 
@@ -935,6 +1149,8 @@ function newGame() {
   over = false;
   peak = 0;
   paintEffect();
+  clearJuice();
+  scoreEl.classList.remove("double-pop", "bump");
   tilesEl.replaceChildren();
   spawn(board);
   spawn(board);
