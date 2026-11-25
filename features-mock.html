@@ -60,7 +60,7 @@ const DEMOS = [
   { id: "crack", name: "裂开", meta: "目标达成", caption: "2048 裂成两块 1024，棋盘从四格涨到五格。" },
   { id: "wild", name: "问号", meta: "怪棋", caption: "问号撞上 8，不比数字，直接升成 16。" },
   { id: "ice", name: "冰", meta: "怪棋", caption: "第一下只把冰敲裂，第二下才合成。" },
-  { id: "chili", name: "辣椒", meta: "怪棋", caption: "辣椒一动，同一方向马上再滑一次。" },
+  { id: "chili", name: "辣椒", meta: "怪棋", caption: "合掉辣椒时，周围最小的一块一起碎掉。" },
   { id: "hole", name: "黑洞", meta: "怪棋", caption: "16 滑进去被吞掉，旁边吐出一块 8。" },
   { id: "rescue", name: "抢救", meta: "满格", caption: "棋盘猛晃，最小的 2 碎掉，再滑出空位。" },
 ];
@@ -214,21 +214,25 @@ const plays = {
     await sleep(900);
   },
   async chili(v) {
-    const hot = special(v.board, "chili", "2", 0, 0, "辣");
-    const side = num(v.board, 4, 2, 0);
-    v.layer.append(hot, side);
-    showTag(v.tag, "向右");
-    await sleep(180);
-    await Promise.all([glide(v.board, hot, 0, 1, 300), glide(v.board, side, 2, 1, 300)]);
-    showTag(v.tag, "再来一次");
-    flash(v.fx, "rgba(255,90,40,.3)");
-    const ghost = hot.cloneNode(true);
-    ghost.classList.add("ghost");
-    v.layer.append(ghost);
-    await Promise.all([glide(v.board, hot, 0, 2, 300), glide(v.board, side, 2, 2, 300)]);
-    ghost.remove();
-    floatText(v.fx, v.board, 0, 2, "辣");
-    await sleep(900);
+    const hot = special(v.board, "chili", "2", 1, 0, "辣");
+    const mate = num(v.board, 2, 1, 3);
+    const small = num(v.board, 2, 0, 0);
+    const big = num(v.board, 8, 2, 1);
+    v.layer.append(hot, mate, small, big);
+    showTag(v.tag, "合掉辣椒");
+    await sleep(240);
+    await glide(v.board, mate, 1, 0, 380);
+    mate.remove();
+    hot.remove();
+    const merged = num(v.board, 4, 1, 0);
+    v.layer.append(merged);
+    pop(merged);
+    await sleep(160);
+    small.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(1.25)", opacity: 0 }], { duration: 320, fill: "forwards" });
+    burst(v.fx, v.board, 0, 0, "#ff5a36");
+    floatText(v.fx, v.board, 0, 1, "碎了");
+    showTag(v.tag, "旁边最小的碎掉");
+    await sleep(1000);
   },
   async hole(v) {
     const black = special(v.board, "hole", "●", 1, 0);

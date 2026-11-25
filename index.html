@@ -392,7 +392,7 @@
   <ul class="rules extra">
     <li><b>问号</b>　能和任何数字合，结果升一级</li>
     <li><b>冰</b>　要撞两次才合得动</li>
-    <li><b>辣椒</b>　它一动，这一滑会再来一次</li>
+    <li><b>辣椒</b>　合掉它时，周围最小的一块一起碎掉</li>
     <li><b>黑洞</b>　吞掉滑进来的块，吐出一半</li>
     <li><b>裂开</b>　合出目标后分成两半，棋盘从 4 格涨到 5 格、6 格</li>
     <li><b>抢救</b>　满了还有 3 秒，再滑一次，最小的一块会碎掉</li>
@@ -680,25 +680,45 @@ function applyMove(src, dir, ctx) {
       keeperC: item.keeperC,
     });
   }
-  return { board: target, score: gained, merges, changed: sig(src) !== sig(target), ghosts, chiliMoved: chiliShifted(src, target) };
+  return { board: target, score: gained, merges, changed: sig(src) !== sig(target), ghosts, blasts: blastChilies(src, target) };
 }
 
-function chiliShifted(src, target) {
+function blastChilies(src, target) {
   const after = new Map();
   for (let r = 0; r < target.length; r++) {
     for (let c = 0; c < target[r].length; c++) {
       const cell = target[r][c];
-      if (cell && cell.kind === "chili") after.set(cell.id, `${r},${c}`);
+      if (cell) after.set(cell.id, cell.kind || "num");
     }
   }
+  const blasts = [];
   for (let r = 0; r < src.length; r++) {
     for (let c = 0; c < src[r].length; c++) {
       const cell = src[r][c];
       if (!cell || cell.kind !== "chili") continue;
-      if (after.get(cell.id) !== `${r},${c}`) return true;
+      if (after.get(cell.id) === "chili") continue;
+      const spot = shatterAround(target, r, c);
+      if (spot) blasts.push(spot);
     }
   }
-  return false;
+  return blasts;
+}
+function shatterAround(board, r, c) {
+  let best = null;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const nr = r + dr;
+      const nc = c + dc;
+      if (nr < 0 || nc < 0 || nr >= board.length || nc >= board[nr].length) continue;
+      const tile = board[nr][nc];
+      if (!tile || tile.kind === "wild" || tile.kind === "hole") continue;
+      if (!best || tile.value < best.value) best = { r: nr, c: nc, value: tile.value };
+    }
+  }
+  if (!best) return null;
+  board[best.r][best.c] = null;
+  return best;
 }
 
 function play(src, dir, state) {
@@ -1089,6 +1109,12 @@ function beam(r1, c1, r2, c2) {
   el.animate([{ opacity: 0 }, { opacity: 1 }, { opacity: 0 }], { duration: 560, easing: "ease-out", fill: "forwards" })
     .finished.then(() => el.remove());
 }
+function playBlasts(blasts) {
+  for (const spot of blasts || []) {
+    burst(spot.r, spot.c, "#ff5a36");
+    floatText(spot.r, spot.c, "碎");
+  }
+}
 function playJuice(rule, ghosts) {
   if (!rule || !ghosts) return;
   if (rule === "boost") {
@@ -1340,12 +1366,11 @@ function commitMove(dir) {
   });
   if (!opening.changed && !forced) return false;
   const my = epoch;
-  let chiliDir = opening.chiliMoved ? dir : null;
   let echoDir = effectOn && currentRule === "echo" ? (lastDir || dir) : null;
-  const step = effectOn || chiliDir ? 340 : MOVE_MS;
+  const step = effectOn ? 340 : MOVE_MS;
   const rule = effectOn ? currentRule : null;
   busy = true;
-  boardEl.classList.toggle("fx-slow", effectOn || Boolean(chiliDir));
+  boardEl.classList.toggle("fx-slow", effectOn);
   clearJuice();
   if (opening.changed) {
     board = opening.board;
@@ -1354,47 +1379,30 @@ function commitMove(dir) {
   lastDir = dir;
   render(opening.ghosts);
   playJuice(rule, opening.ghosts);
+  playBlasts(opening.blasts);
   const finish = (merges) => {
     const gained = score - scoreAtStart;
     finishMove(my, merges, effectOn, gained);
   };
-  const afterEcho = (mergesSoFar) => {
+  setTimeout(() => {
+    if (my !== epoch) return;
     if (!echoDir) {
-      finish(mergesSoFar);
+      finish(opening.merges);
       return;
     }
     const echoSlide = applyMove(board, echoDir, { rule: null, rebel, fever: tier });
     echoDir = null;
     if (!echoSlide.changed) {
-      finish(mergesSoFar);
+      finish(opening.merges);
       return;
     }
     stampEcho();
     board = echoSlide.board;
     score += echoSlide.score;
     render(echoSlide.ghosts);
+    playBlasts(echoSlide.blasts);
     setTimeout(() => {
-      if (my === epoch) finish(mergesSoFar + echoSlide.merges);
-    }, step);
-  };
-  setTimeout(() => {
-    if (my !== epoch) return;
-    if (!chiliDir) {
-      afterEcho(opening.merges);
-      return;
-    }
-    const second = applyMove(board, chiliDir, { rule: null, rebel, fever: tier });
-    chiliDir = null;
-    if (!second.changed) {
-      afterEcho(opening.merges);
-      return;
-    }
-    floatText(0, 0, "辣");
-    board = second.board;
-    score += second.score;
-    render(second.ghosts);
-    setTimeout(() => {
-      if (my === epoch) afterEcho(opening.merges + second.merges);
+      if (my === epoch) finish(opening.merges + echoSlide.merges);
     }, step);
   }, step);
   return true;
