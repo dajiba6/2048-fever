@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2048 狂热</title>
+<style>
+  :root {
+    --bg: #faf8ef;
+    --ink: #776e65;
+    --board: #bbada0;
+    --gap: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 20px 16px 36px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    user-select: none;
+    transition: background .35s ease, color .35s ease;
+  }
+  body.fever {
+    --bg: #2a120c;
+    --ink: #fff1e6;
+    background:
+      radial-gradient(circle at 18% 0%, rgba(255, 120, 40, .38), transparent 36%),
+      radial-gradient(circle at 90% 10%, rgba(255, 40, 70, .32), transparent 32%),
+      var(--bg);
+  }
+  body.good {
+    --bg: #2a220c;
+    --ink: #fff6df;
+    background:
+      radial-gradient(circle at 18% 0%, rgba(255, 196, 60, .42), transparent 36%),
+      radial-gradient(circle at 90% 10%, rgba(255, 140, 40, .28), transparent 32%),
+      var(--bg);
+  }
+  .wrap { width: min(440px, 100%); }
+  header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+  h1 { margin: 0; font-size: 52px; line-height: .9; letter-spacing: -1px; }
+  h1 em {
+    font-style: normal;
+    font-size: 16px;
+    letter-spacing: 0;
+    color: #fffaf5;
+    background: #f65e3b;
+    border-radius: 999px;
+    padding: 3px 8px;
+    vertical-align: 18px;
+  }
+  .lead { margin: 10px 0 0; font-size: 14px; line-height: 1.5; }
+  .side { display: grid; justify-items: end; gap: 8px; }
+  .scores { display: flex; gap: 6px; }
+  .box {
+    background: #bbada0;
+    color: #fff;
+    border-radius: 4px;
+    min-width: 72px;
+    padding: 6px 10px 7px;
+    text-align: center;
+  }
+  body.fever .box { background: #6a3328; }
+  body.good .box { background: #6a5420; }
+  .box span { display: block; font-size: 11px; letter-spacing: .08em; }
+  .box strong { display: block; font-size: 22px; line-height: 1.1; }
+  .box strong.bump { animation: pop .16s ease; }
+  button {
+    border: 0;
+    border-radius: 4px;
+    background: #8f7a66;
+    color: #f9f6f2;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
+  }
+  button:active { transform: scale(.96); }
+  #restart { padding: 8px 14px; }
+  #meter-wrap { margin: 14px 0 6px; }
+  #meter {
+    height: 14px;
+    background: #bbada0;
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  body.fever #meter { background: #5a2e26; }
+  body.good #meter { background: #5a4520; }
+  #meter > div {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, #f2b179, #f65e3b 70%, #ff2d2d);
+  }
+  body.fever #meter > div {
+    background: linear-gradient(90deg, #ffe066, #ff5a1f 40%, #ff2244);
+  }
+  body.good #meter > div {
+    background: linear-gradient(90deg, #ffe08a, #f0a202 55%, #ff7a18);
+  }
+  #timer, #lastdir, #peak { margin: 0; font-size: 13px; min-height: 1.2em; }
+  #lastdir { font-weight: 700; }
+  #status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  #board {
+    width: min(92vw, 380px);
+    aspect-ratio: 1;
+    margin: 10px auto 0;
+    position: relative;
+    touch-action: none;
+    background: var(--board);
+    border-radius: 8px;
+    padding: var(--gap);
+  }
+  body.fever #board { box-shadow: 0 0 0 4px rgba(255, 90, 30, .45); }
+  body.good #board { box-shadow: 0 0 0 4px rgba(240, 180, 40, .55); }
+  #board.shake { animation: shake .45s linear; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--gap);
+    height: 100%;
+  }
+  .cell { background: #cdc1b4; border-radius: 4px; }
+  #effects, #tiles, #overlay {
+    position: absolute;
+    inset: var(--gap);
+  }
+  #effects { z-index: 3; pointer-events: none; }
+  #tiles { z-index: 2; pointer-events: none; }
+  .stripe {
+    position: absolute;
+    border: 4px solid rgba(255, 70, 20, .95);
+    box-shadow: inset 0 0 0 2px rgba(255, 214, 90, .95);
+    border-radius: 6px;
+  }
+  .tile {
+    position: absolute;
+    width: calc((100% - 30px) / 4);
+    height: calc((100% - 30px) / 4);
+    border-radius: 4px;
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+    transition: left .12s ease, top .12s ease;
+  }
+  .tile.pop { animation: pop .16s ease; }
+  .tile.born { animation: born .12s ease; }
+  .tile.gone { opacity: 0; transform: scale(.55); transition: left .12s ease, top .12s ease, opacity .12s ease, transform .12s ease; }
+  #splash {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 64px;
+    font-weight: 900;
+    color: #ff4d2e;
+    -webkit-text-stroke: 7px #fff7ef;
+    paint-order: stroke fill;
+    opacity: 0;
+    z-index: 4;
+  }
+  #splash.show { animation: splash .9s ease; }
+  #overlay {
+    z-index: 5;
+    display: grid;
+    place-items: center;
+    background: rgba(187, 173, 160, .72);
+    border-radius: 4px;
+    text-align: center;
+    pointer-events: auto;
+  }
+  #overlay .card {
+    background: #faf8ef;
+    color: #776e65;
+    padding: 16px 22px 18px;
+    border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(70, 50, 30, .22);
+    max-height: 100%;
+    overflow: auto;
+  }
+  body.fever #overlay { background: rgba(42, 18, 12, .72); }
+  body.fever #overlay .card { background: #3a1c14; color: #fff1e6; }
+  body.good #overlay { background: rgba(42, 34, 12, .72); }
+  body.good #overlay .card { background: #3a3014; color: #fff6df; }
+  body.good #player-id { background: #5a4520; color: #fff6df; }
+  #overlay[hidden] { display: none; }
+  #overlay h2 { margin: 0; font-size: 42px; }
+  #overlay p { margin: 0 0 8px; }
+  #overlay button { padding: 10px 16px; }
+  #score-form { display: flex; gap: 6px; margin-top: 4px; }
+  #score-form[hidden] { display: none; }
+  #player-id {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    border-radius: 4px;
+    background: #eee4da;
+    color: #776e65;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 8px 10px;
+    user-select: text;
+  }
+  body.fever #player-id { background: #5a332c; color: #fff1e6; }
+  #save-note { min-height: 1.2em; margin: 8px 0; font-size: 13px; font-weight: 700; }
+  .ranks { margin-top: 16px; }
+  .ranks h2 { margin: 0; font-size: 16px; }
+  .rank-list { list-style: none; padding: 0; margin: 8px 0 0; text-align: left; }
+  .rank-list li {
+    display: grid;
+    grid-template-columns: 1.6em 1fr auto;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 14px;
+  }
+  .rank-list li.mine { font-weight: 800; }
+  #rank-empty { margin: 6px 0 0; font-size: 13px; }
+  .pad { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 14px; }
+  .pad .row { display: flex; gap: 8px; }
+  .pad button { width: 56px; height: 52px; font-size: 22px; }
+  .hint, .rules, .later { font-size: 13px; line-height: 1.5; }
+  .hint { text-align: center; margin: 8px 0 0; }
+  .rules { list-style: none; padding: 0; margin: 12px 0 0; }
+  .rules li { padding: 2px 6px; border-radius: 4px; }
+  .rules li.on { background: rgba(246, 94, 59, .18); font-weight: 700; }
+  .later { margin: 10px 0 0; opacity: .8; }
+  #crash {
+    background: #3a1010;
+    color: #fff;
+    padding: 10px;
+    white-space: pre-wrap;
+  }
+  @keyframes pop {
+    50% { transform: scale(1.14); }
+  }
+  @keyframes born {
+    from { transform: scale(0); }
+    to { transform: scale(1); }
+  }
+  @keyframes splash {
+    0% { opacity: 0; transform: scale(.6); }
+    18% { opacity: 1; transform: scale(1.06); }
+    70% { opacity: 1; }
+    100% { opacity: 0; transform: scale(1.15); }
+  }
+  @keyframes shake {
+    20% { transform: translateX(-3px) rotate(-.4deg); }
+    40% { transform: translateX(3px) rotate(.4deg); }
+    60% { transform: translateX(-2px); }
+    80% { transform: translateX(2px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #board.shake, #splash.show, .tile.pop, .tile.born { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>2048 <em>狂热</em></h1>
+    </div>
+    <div class="side">
+      <div class="scores">
+        <div class="box"><span>得分</span><strong id="score">0</strong></div>
+        <div class="box"><span>最高</span><strong id="best">0</strong></div>
+      </div>
+      <button type="button" id="restart">新游戏</button>
+    </div>
+  </header>
+  <p class="lead">狂热攒满后，随机来一条特效。<br>按滑动次数倒数，停着不滑不会结束。</p>
+  <p id="peak">目标 2048</p>
+
+  <div id="meter-wrap">
+    <div id="meter" aria-hidden="true"><div></div></div>
+  </div>
+  <p id="timer">合成会积攒狂热</p>
+  <p id="lastdir">上一次的方向：还没有</p>
+  <p id="status" aria-live="polite"></p>
+
+  <div id="board">
+    <div class="grid"></div>
+    <div id="effects">
+      <div class="stripe" id="rebel-row" hidden></div>
+      <div class="stripe" id="rebel-col" hidden></div>
+      <div id="splash"></div>
+    </div>
+    <div id="tiles"></div>
+    <div id="overlay" hidden>
+      <div class="card">
+        <h2>满了</h2>
+        <p id="over-text"></p>
+        <form id="score-form">
+          <input id="player-id" name="id" maxlength="12" placeholder="输入 ID" aria-label="ID" autocomplete="nickname" enterkeyhint="done">
+          <button type="submit">记下</button>
+        </form>
+        <p id="save-note"></p>
+        <ol id="overlay-ranks" class="rank-list"></ol>
+        <button type="button" id="again">再来一局</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="pad" aria-label="方向键">
+    <button type="button" data-dir="up" aria-label="上">↑</button>
+    <div class="row">
+      <button type="button" data-dir="left" aria-label="左">←</button>
+      <button type="button" data-dir="down" aria-label="下">↓</button>
+      <button type="button" data-dir="right" aria-label="右">→</button>
+    </div>
+  </div>
+  <p class="hint">方向键、WASD，或在棋盘上滑动</p>
+  <ul class="rules">
+    <li data-rule="boost"><b>升阶</b>　合成再升一级，两个 2 会变成 8</li>
+    <li data-rule="blank"><b>留白</b>　这几滑不刷新新块</li>
+    <li data-rule="diagonal"><b>斜合</b>　斜着贴住的相同数字也会合成</li>
+    <li data-rule="double"><b>加倍</b>　这几滑的合成分数翻倍</li>
+    <li data-rule="echo"><b>回声</b>　滑完之后，按上一次的方向再滑一次</li>
+    <li data-rule="antigrav"><b>反重力</b>　发亮的那一行、那一列会朝反方向跑</li>
+  </ul>
+  <section class="ranks">
+    <h2>排行榜</h2>
+    <p id="rank-empty">还没有记录。一局结束之后可以留下 ID。</p>
+    <ol id="rank-list" class="rank-list"></ol>
+  </section>
+  <p class="later">还没放进来：2048 裂开后棋盘变大、问号 / 冰 / 辣椒 / 黑洞、满格抢救。</p>
+</div>
+<script>
+const SIZE = 4;
+const FEVER_PER_MERGE = 25;
+const MOVE_MS = 140;
+const DIRS = ["left", "right", "up", "down"];
+const DIR_ARROW = { left: "←", right: "→", up: "↑", down: "↓" };
+const RULES = {
+  boost: { name: "升阶", tone: "good", turns: 4, line: "合成再升一级" },
+  blank: { name: "留白", tone: "good", turns: 3, line: "这几滑不刷新新块" },
+  diagonal: { name: "斜合", tone: "good", turns: 4, line: "斜着贴住也会合成" },
+  double: { name: "加倍", tone: "good", turns: 4, line: "合成分数翻倍" },
+  echo: { name: "回声", tone: "bad", turns: 3, line: "滑完再按上一次的方向滑" },
+  antigrav: { name: "反重力", tone: "bad", turns: 3, line: "发亮的行和列朝反方向" },
+};
+const TILES = {
+  2: ["#eee4da", "#776e65"],
+  4: ["#ede0c8", "#776e65"],
+  8: ["#f2b179", "#f9f6f2"],
+  16: ["#f59563", "#f9f6f2"],
+  32: ["#f67c5f", "#f9f6f2"],
+  64: ["#f65e3b", "#f9f6f2"],
+  128: ["#edcf72", "#f9f6f2"],
+  256: ["#edcc61", "#f9f6f2"],
+  512: ["#edc850", "#f9f6f2"],
+  1024: ["#edc53f", "#f9f6f2"],
+  2048: ["#edc22e", "#f9f6f2"],
+};
+
+const boardEl = document.getElementById("board");
+const tilesEl = document.getElementById("tiles");
+const gridEl = boardEl.querySelector(".grid");
+const meterBar = document.querySelector("#meter > div");
+const timerEl = document.getElementById("timer");
+const lastDirEl = document.getElementById("lastdir");
+const statusEl = document.getElementById("status");
+const scoreEl = document.getElementById("score");
+const bestEl = document.getElementById("best");
+const peakEl = document.getElementById("peak");
+const overlayEl = document.getElementById("overlay");
+const overTextEl = document.getElementById("over-text");
+const splashEl = document.getElementById("splash");
+const rowStripe = document.getElementById("rebel-row");
+const colStripe = document.getElementById("rebel-col");
+
+for (let i = 0; i < 16; i++) gridEl.appendChild(document.createElement("div")).className = "cell";
+
+let nextId = 1;
+let board = emptyBoard();
+let score = 0;
+let best = loadBest();
+let meter = 0;
+let currentRule = null;
+let lastRule = null;
+let turnsLeft = 0;
+let rebel = 0;
+let lastDir = null;
+let over = false;
+let busy = false;
+let queued = null;
+let epoch = 0;
+let peak = 0;
+
+function emptyBoard() {
+  return Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
+}
+function opposite(dir) {
+  return { left: "right", right: "left", up: "down", down: "up" }[dir];
+}
+function sig(src) {
+  let s = "";
+  for (const row of src) for (const cell of row) s += (cell ? cell.value : 0) + ",";
+  return s;
+}
+function cloneBoard(src) {
+  return src.map((row) => row.map((cell) => (cell ? { id: cell.id, value: cell.value, merged: false } : null)));
+}
+function frontKey(r, c, dir) {
+  if (dir === "left") return c;
+  if (dir === "right") return -c;
+  if (dir === "up") return r;
+  return -r;
+}
+function lineCoords(axis, index, toward) {
+  const coords = [];
+  for (let k = 0; k < SIZE; k++) {
+    const step = toward === "left" || toward === "up" ? k : SIZE - 1 - k;
+    coords.push(axis === "h" ? { r: index, c: step } : { r: step, c: index });
+  }
+  return coords;
+}
+function bumped(value, fever) {
+  return fever ? value * 4 : value * 2;
+}
+
+function diagonalMerge(target, dir, fever) {
+  const pairs = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const a = target[r][c];
+      if (!a) continue;
+      for (const [dr, dc] of [[1, 1], [1, -1]]) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
+        const b = target[nr][nc];
+        if (!b || a.value !== b.value) continue;
+        pairs.push({ r, c, nr, nc, front: Math.min(frontKey(r, c, dir), frontKey(nr, nc, dir)) });
+      }
+    }
+  }
+  pairs.sort((a, b) => a.front - b.front);
+  const dead = new Set();
+  const eaten = [];
+  let gained = 0;
+  let merges = 0;
+  for (const pair of pairs) {
+    const a = target[pair.r][pair.c];
+    const b = target[pair.nr][pair.nc];
+    if (!a || !b || dead.has(a.id) || dead.has(b.id) || a.value !== b.value) continue;
+    const keepA = frontKey(pair.r, pair.c, dir) <= frontKey(pair.nr, pair.nc, dir);
+    const kr = keepA ? pair.r : pair.nr;
+    const kc = keepA ? pair.c : pair.nc;
+    const vr = keepA ? pair.nr : pair.r;
+    const vc = keepA ? pair.nc : pair.c;
+    const keeper = target[kr][kc];
+    const victim = target[vr][vc];
+    keeper.value = bumped(keeper.value, fever);
+    keeper.merged = true;
+    target[vr][vc] = null;
+    dead.add(keeper.id);
+    dead.add(victim.id);
+    eaten.push([victim.id, keeper.id]);
+    gained += keeper.value;
+    merges += 1;
+  }
+  return { score: gained, merges, eaten };
+}
+
+function slideLine(target, coords, fever) {
+  const present = [];
+  for (const spot of coords) if (target[spot.r][spot.c]) present.push(target[spot.r][spot.c]);
+  const out = [];
+  const eaten = [];
+  let gained = 0;
+  let merges = 0;
+  for (let i = 0; i < present.length; i++) {
+    const cur = present[i];
+    const nxt = present[i + 1];
+    if (nxt && !cur.merged && !nxt.merged && cur.value === nxt.value) {
+      cur.value = bumped(cur.value, fever);
+      cur.merged = true;
+      eaten.push([nxt.id, cur.id]);
+      out.push(cur);
+      gained += cur.value;
+      merges += 1;
+      i += 1;
+    } else {
+      out.push(cur);
+    }
+  }
+  for (let i = 0; i < coords.length; i++) target[coords[i].r][coords[i].c] = out[i] || null;
+  return { score: gained, merges, eaten };
+}
+
+function applyMove(src, dir, ctx) {
+  const target = cloneBoard(src);
+  const eaten = [];
+  let gained = 0;
+  let merges = 0;
+  if (ctx.rule === "diagonal") {
+    const part = diagonalMerge(target, dir, ctx.fever);
+    gained += part.score;
+    merges += part.merges;
+    eaten.push(...part.eaten);
+  }
+  const axis = dir === "left" || dir === "right" ? "h" : "v";
+  for (let i = 0; i < SIZE; i++) {
+    const toward = ctx.rule === "antigrav" && i === ctx.rebel ? opposite(dir) : dir;
+    const part = slideLine(target, lineCoords(axis, i, toward), ctx.fever);
+    gained += part.score;
+    merges += part.merges;
+    eaten.push(...part.eaten);
+  }
+  const at = new Map();
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) if (target[r][c]) at.set(target[r][c].id, { r, c });
+  }
+  const ghosts = [];
+  for (const [victimId, keeperId] of eaten) {
+    const spot = at.get(keeperId);
+    if (spot) ghosts.push({ id: victimId, r: spot.r, c: spot.c });
+  }
+  return { board: target, score: gained, merges, changed: sig(src) !== sig(target), ghosts };
+}
+
+function play(src, dir, state) {
+  const first = applyMove(src, dir, {
+    rule: state.rule === "echo" ? null : state.rule,
+    rebel: state.rebel,
+    fever: state.fever,
+  });
+  if (!first.changed) return { board: src, changed: false, score: 0, merges: 0, lastDir: state.lastDir, ghosts: [], echo: null };
+  let next = first.board;
+  let gained = first.score;
+  let merges = first.merges;
+  let echo = null;
+  if (state.rule === "echo") {
+    const echoDir = state.lastDir || dir;
+    const second = applyMove(next, echoDir, { rule: null, rebel: state.rebel, fever: state.fever });
+    echo = { dir: echoDir, result: second };
+    if (second.changed) {
+      next = second.board;
+      gained += second.score;
+      merges += second.merges;
+    }
+  }
+  return { board: next, changed: true, score: gained, merges, lastDir: dir, ghosts: first.ghosts, echo };
+}
+
+function spawn(target) {
+  const spots = [];
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) if (!target[r][c]) spots.push([r, c]);
+  if (!spots.length) return false;
+  const [r, c] = spots[Math.floor(Math.random() * spots.length)];
+  target[r][c] = { id: nextId++, value: Math.random() < 0.9 ? 2 : 4, fresh: true };
+  return true;
+}
+function maxTile(src) {
+  let m = 0;
+  for (const row of src) for (const cell of row) if (cell) m = Math.max(m, cell.value);
+  return m;
+}
+function effectActive() {
+  return Boolean(currentRule) && turnsLeft > 0;
+}
+function effectDetail() {
+  const rule = RULES[currentRule];
+  if (!rule) return "";
+  if (currentRule === "echo") {
+    return lastDir ? `下一记回声往 ${DIR_ARROW[lastDir]}` : "下一记回声沿这一滑的方向";
+  }
+  if (currentRule === "antigrav") return `第 ${rebel + 1} 行、第 ${rebel + 1} 列反着走`;
+  return rule.line;
+}
+function paintEffect() {
+  const rule = currentRule ? RULES[currentRule] : null;
+  document.body.classList.toggle("fever", Boolean(rule && rule.tone === "bad"));
+  document.body.classList.toggle("good", Boolean(rule && rule.tone === "good"));
+}
+function loadBest() {
+  try { return Number(localStorage.getItem("crazy2048-best")) || 0; }
+  catch { return 0; }
+}
+function saveBest() {
+  if (score <= best) return;
+  best = score;
+  try { localStorage.setItem("crazy2048-best", String(best)); }
+  catch { /* 隐私模式里就只留在这一局 */ }
+}
+
+const RANK_KEY = "crazy2048-board";
+const ID_KEY = "crazy2048-id";
+let recorded = false;
+let latestEntry = null;
+
+function loadRanks() {
+  try {
+    const data = JSON.parse(localStorage.getItem(RANK_KEY) || "[]");
+    if (!Array.isArray(data)) return [];
+    return data.filter((row) => row && typeof row.id === "string" && Number.isFinite(row.score));
+  } catch {
+    return [];
+  }
+}
+function loadLastId() {
+  try { return localStorage.getItem(ID_KEY) || ""; }
+  catch { return ""; }
+}
+function paintRanks(list, rows, mine, limit) {
+  list.replaceChildren();
+  rows.slice(0, limit).forEach((row, index) => {
+    const li = document.createElement("li");
+    if (mine && row.at === mine.at && row.id === mine.id) li.className = "mine";
+    const place = document.createElement("span");
+    place.textContent = String(index + 1);
+    const name = document.createElement("span");
+    name.textContent = row.id;
+    const points = document.createElement("span");
+    points.textContent = row.score.toLocaleString("zh-CN");
+    li.append(place, name, points);
+    list.appendChild(li);
+  });
+}
+function renderRanks() {
+  const rows = loadRanks();
+  paintRanks(document.getElementById("overlay-ranks"), rows, latestEntry, 5);
+  paintRanks(document.getElementById("rank-list"), rows, latestEntry, 10);
+  document.getElementById("rank-empty").hidden = rows.length > 0;
+}
+function openScoreEntry() {
+  recorded = false;
+  latestEntry = null;
+  const form = document.getElementById("score-form");
+  const note = document.getElementById("save-note");
+  const input = document.getElementById("player-id");
+  form.hidden = false;
+  note.textContent = "";
+  input.value = loadLastId();
+  renderRanks();
+  setTimeout(() => input.focus(), 0);
+}
+function recordScore(rawId) {
+  const id = rawId.trim().slice(0, 12);
+  const note = document.getElementById("save-note");
+  if (!id) {
+    note.textContent = "先写一个 ID";
+    document.getElementById("player-id").focus();
+    return;
+  }
+  if (recorded) return;
+  const entry = { id, score, tile: maxTile(board), at: Date.now() };
+  const rows = loadRanks();
+  rows.push(entry);
+  rows.sort((a, b) => b.score - a.score || a.at - b.at);
+  const kept = rows.slice(0, 50);
+  try {
+    localStorage.setItem(RANK_KEY, JSON.stringify(kept));
+    localStorage.setItem(ID_KEY, id);
+  } catch {
+    note.textContent = "这个浏览器存不下记录";
+    return;
+  }
+  recorded = true;
+  latestEntry = entry;
+  document.getElementById("score-form").hidden = true;
+  const rank = kept.findIndex((row) => row.at === entry.at && row.id === entry.id) + 1;
+  note.textContent = rank ? `已记下，第 ${rank} 名` : "已记下，没能进前 50 名";
+  setStatus(`${note.textContent}。${id}，得分 ${score}。`);
+  renderRanks();
+}
+
+function canAnyMove() {
+  const state = { rule: currentRule, rebel, fever: currentRule === "boost", lastDir };
+  return DIRS.some((dir) => play(board, dir, state).changed);
+}
+function checkOver() {
+  over = !canAnyMove();
+}
+function pos(i) {
+  return `calc(${i} * ((100% - 30px) / 4 + 10px))`;
+}
+function tileLook(value) {
+  if (TILES[value]) return TILES[value];
+  return ["#3c3a32", "#f9f6f2"];
+}
+function fontSize(value) {
+  const digits = String(value).length;
+  if (digits <= 2) return "34px";
+  if (digits === 3) return "28px";
+  if (digits === 4) return "22px";
+  return "16px";
+}
+function splash(text) {
+  splashEl.textContent = text;
+  splashEl.classList.remove("show");
+  void splashEl.offsetWidth;
+  splashEl.classList.add("show");
+}
+function setStatus(text) {
+  statusEl.textContent = text;
+}
+
+function startEffect() {
+  const pool = Object.keys(RULES).filter((id) => id !== lastRule);
+  currentRule = pool[Math.floor(Math.random() * pool.length)];
+  const rule = RULES[currentRule];
+  lastRule = currentRule;
+  rebel = Math.floor(Math.random() * SIZE);
+  turnsLeft = rule.turns;
+  meter = 100;
+  paintEffect();
+  if (rule.tone === "bad") {
+    boardEl.classList.add("shake");
+    setTimeout(() => boardEl.classList.remove("shake"), 450);
+  }
+  splash(`${rule.name}！`);
+  setStatus(`${rule.name}。${effectDetail()}。还剩 ${turnsLeft} 滑。`);
+}
+function endEffect() {
+  currentRule = null;
+  turnsLeft = 0;
+  meter = 0;
+  paintEffect();
+  setStatus("特效结束。");
+}
+function spendTurn() {
+  turnsLeft -= 1;
+  if (turnsLeft <= 0) endEffect();
+  else setStatus(`${RULES[currentRule].name}。${effectDetail()}。还剩 ${turnsLeft} 滑。`);
+}
+function charge(merges) {
+  if (merges <= 0 || effectActive()) return;
+  meter = Math.min(100, meter + merges * FEVER_PER_MERGE);
+  if (meter >= 100) startEffect();
+}
+
+function render(ghosts = []) {
+  const ghostAt = new Map(ghosts.map((ghost) => [String(ghost.id), ghost]));
+  const alive = new Set();
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const tile = board[r][c];
+      if (!tile) continue;
+      const id = String(tile.id);
+      alive.add(id);
+      let el = tilesEl.querySelector(`.tile[data-id="${id}"]:not(.gone)`);
+      const isNew = !el;
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "tile";
+        el.dataset.id = id;
+        tilesEl.appendChild(el);
+      }
+      const [bg, fg] = tileLook(tile.value);
+      el.textContent = tile.value;
+      el.style.background = bg;
+      el.style.color = fg;
+      el.style.fontSize = fontSize(tile.value);
+      el.style.zIndex = "2";
+      if (isNew || tile.fresh) {
+        el.style.transition = "none";
+        el.style.left = pos(c);
+        el.style.top = pos(r);
+        el.classList.add("born");
+        requestAnimationFrame(() => { el.style.transition = ""; });
+      } else {
+        if (el.dataset.value !== String(tile.value)) {
+          el.classList.remove("pop");
+          void el.offsetWidth;
+          el.classList.add("pop");
+          el.style.zIndex = "3";
+        }
+        el.style.left = pos(c);
+        el.style.top = pos(r);
+      }
+      el.dataset.value = String(tile.value);
+      tile.fresh = false;
+    }
+  }
+  for (const el of [...tilesEl.children]) {
+    if (el.classList.contains("gone") || alive.has(el.dataset.id)) continue;
+    const ghost = ghostAt.get(el.dataset.id);
+    if (ghost) {
+      el.style.left = pos(ghost.c);
+      el.style.top = pos(ghost.r);
+      el.style.zIndex = "1";
+    }
+    el.classList.add("gone");
+    const gone = el;
+    setTimeout(() => gone.remove(), MOVE_MS);
+  }
+
+  if (scoreEl.textContent !== String(score)) {
+    scoreEl.textContent = String(score);
+    scoreEl.classList.remove("bump");
+    void scoreEl.offsetWidth;
+    scoreEl.classList.add("bump");
+  }
+  bestEl.textContent = String(best);
+  peak = Math.max(peak, maxTile(board));
+  peakEl.textContent = peak >= 2048 ? `这局到过 ${peak}` : "目标 2048";
+  lastDirEl.textContent = lastDir ? `上一次的方向：${DIR_ARROW[lastDir]}` : "上一次的方向：还没有";
+  const showRebel = currentRule === "antigrav";
+  rowStripe.hidden = !showRebel;
+  colStripe.hidden = !showRebel;
+  if (showRebel) {
+    rowStripe.style.top = pos(rebel);
+    rowStripe.style.left = "0";
+    rowStripe.style.width = "100%";
+    rowStripe.style.height = "calc((100% - 30px) / 4)";
+    colStripe.style.left = pos(rebel);
+    colStripe.style.top = "0";
+    colStripe.style.height = "100%";
+    colStripe.style.width = "calc((100% - 30px) / 4)";
+  }
+  for (const li of document.querySelectorAll(".rules li")) {
+    li.classList.toggle("on", li.dataset.rule === currentRule);
+  }
+  const openingOverlay = overlayEl.hidden && over;
+  overlayEl.hidden = !over;
+  if (over) {
+    const reached = maxTile(board);
+    overTextEl.textContent = reached >= 2048 ? `得分 ${score}，到过 ${reached}` : `得分 ${score}`;
+    if (openingOverlay) openScoreEntry();
+  }
+}
+
+function updateMeter() {
+  if (effectActive()) {
+    const rule = RULES[currentRule];
+    meterBar.style.transition = "none";
+    meterBar.style.width = `${(turnsLeft / rule.turns) * 100}%`;
+    timerEl.textContent = `${rule.name} · 还剩 ${turnsLeft} 滑 · ${effectDetail()}`;
+  } else {
+    meterBar.style.transition = "width .2s ease";
+    meterBar.style.width = `${meter}%`;
+    timerEl.textContent = meter > 0 ? `狂热 ${meter}` : "合成会积攒狂热";
+  }
+}
+
+function finishMove(my, merges, effectOn, gained) {
+  if (my !== epoch) return;
+  if (effectOn && currentRule === "double") score += gained;
+  if (!(effectOn && currentRule === "blank")) spawn(board);
+  if (effectOn) spendTurn();
+  else charge(merges);
+  saveBest();
+  checkOver();
+  busy = false;
+  render();
+  updateMeter();
+  if (over) setStatus(`棋盘满了。得分 ${score}。`);
+  if (queued && !over) {
+    const dir = queued;
+    queued = null;
+    tryMove(dir);
+  }
+}
+
+function tryMove(dir) {
+  if (!dir || over) return;
+  if (busy) {
+    queued = dir;
+    return;
+  }
+  commitMove(dir);
+}
+
+function commitMove(dir) {
+  if (over || busy) return false;
+  const effectOn = effectActive();
+  const tier = effectOn && currentRule === "boost";
+  const scoreAtStart = score;
+  const opening = applyMove(board, dir, {
+    rule: currentRule === "echo" ? null : currentRule,
+    rebel,
+    fever: tier,
+  });
+  if (!opening.changed) return false;
+  const my = epoch;
+  const echoDir = effectOn && currentRule === "echo" ? (lastDir || dir) : null;
+  busy = true;
+  board = opening.board;
+  score += opening.score;
+  lastDir = dir;
+  render(opening.ghosts);
+  const finish = (merges) => {
+    const gained = score - scoreAtStart;
+    finishMove(my, merges, effectOn, gained);
+  };
+  setTimeout(() => {
+    if (my !== epoch) return;
+    if (!echoDir) {
+      finish(opening.merges);
+      return;
+    }
+    const second = applyMove(board, echoDir, { rule: null, rebel, fever: tier });
+    if (!second.changed) {
+      finish(opening.merges);
+      return;
+    }
+    board = second.board;
+    score += second.score;
+    render(second.ghosts);
+    setTimeout(() => {
+      if (my !== epoch) return;
+      finish(opening.merges + second.merges);
+    }, MOVE_MS);
+  }, MOVE_MS);
+  return true;
+}
+
+function newGame() {
+  epoch += 1;
+  busy = false;
+  queued = null;
+  nextId = 1;
+  board = emptyBoard();
+  score = 0;
+  meter = 0;
+  currentRule = null;
+  lastRule = null;
+  turnsLeft = 0;
+  lastDir = null;
+  over = false;
+  peak = 0;
+  paintEffect();
+  tilesEl.replaceChildren();
+  spawn(board);
+  spawn(board);
+  setStatus("");
+  render();
+}
+
+const KEYS = {
+  ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+  a: "left", d: "right", w: "up", s: "down",
+  A: "left", D: "right", W: "up", S: "down",
+};
+
+document.getElementById("restart").addEventListener("click", newGame);
+document.getElementById("again").addEventListener("click", newGame);
+document.getElementById("score-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!over) return;
+  recordScore(document.getElementById("player-id").value);
+});
+document.querySelector(".pad").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (button) tryMove(button.dataset.dir);
+});
+window.addEventListener("keydown", (event) => {
+  if (event.target.closest("input, textarea")) return;
+  const dir = KEYS[event.key];
+  if (!dir) return;
+  event.preventDefault();
+  tryMove(dir);
+});
+
+let pointer = null;
+boardEl.addEventListener("pointerdown", (event) => {
+  if (event.target.closest("button, input, form")) return;
+  pointer = { x: event.clientX, y: event.clientY };
+});
+boardEl.addEventListener("pointerup", (event) => {
+  if (!pointer) return;
+  const dx = event.clientX - pointer.x;
+  const dy = event.clientY - pointer.y;
+  pointer = null;
+  if (Math.hypot(dx, dy) < 28) return;
+  tryMove(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
+});
+boardEl.addEventListener("pointercancel", () => { pointer = null; });
+
+function selfTest() {
+  const problems = [];
+  const check = (name, cond) => { if (!cond) problems.push(name); };
+  const make = (rows) => {
+    let id = 1;
+    return rows.map((row) => row.map((value) => (value ? { id: id++, value } : null)));
+  };
+  const values = (src) => src.map((row) => row.map((cell) => (cell ? cell.value : 0)));
+  const same = (src, rows) => JSON.stringify(values(src)) === JSON.stringify(rows);
+
+  const classic = make([[2, 2, 2, 2], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  const classicMove = applyMove(classic, "left", { rule: null, rebel: 0, fever: false });
+  check("四个 2 向左合成两对 4", same(classicMove.board, [[4, 4, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]) && classicMove.score === 8);
+  check("合成不改原棋盘", sig(classic) === sig(make([[2, 2, 2, 2], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])));
+
+  const chain = make([[2, 2, 4, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  const chainMove = applyMove(chain, "left", { rule: null, rebel: 0, fever: false });
+  check("新合成的 4 不再接着合", same(chainMove.board, [[4, 4, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]) && chainMove.score === 4);
+
+  const hot = make([[2, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  const hotMove = applyMove(hot, "left", { rule: null, rebel: 0, fever: true });
+  check("发病时两个 2 变成 8", same(hotMove.board, [[8, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]) && hotMove.score === 8);
+
+  const stuck = make([[2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  check("顶住了不算一步", !applyMove(stuck, "left", { rule: null, rebel: 0, fever: false }).changed);
+
+  const diag = make([[2, 0, 0, 0], [0, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  const diagMove = applyMove(diag, "left", { rule: "diagonal", rebel: 0, fever: false });
+  check("斜合把斜向的 2 合成 4", same(diagMove.board, [[4, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]) && diagMove.score === 4);
+
+  const grav = make([[2, 0, 0, 0], [0, 0, 2, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  const gravMove = applyMove(grav, "left", { rule: "antigrav", rebel: 0, fever: false });
+  check("反重力只有发亮那一行反向", same(gravMove.board, [[0, 0, 0, 2], [2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]));
+
+  const echoBoard = make([[0, 0, 0, 0], [2, 0, 0, 2], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  const echoMove = play(echoBoard, "up", { rule: "echo", rebel: 0, fever: false, lastDir: "left" });
+  check("回声先执行这一滑，再补上一次的方向", same(echoMove.board, [[4, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]) && echoMove.score === 4);
+
+  const echoStuck = make([[2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+  const echoNo = play(echoStuck, "left", { rule: "echo", rebel: 0, fever: false, lastDir: "right" });
+  check("这一滑没推动就不触发回声", !echoNo.changed && same(echoStuck, [[2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]));
+  return problems;
+}
+
+const problems = selfTest();
+if (problems.length) {
+  const note = document.createElement("pre");
+  note.id = "crash";
+  note.textContent = problems.join("\n");
+  document.body.prepend(note);
+}
+
+window.addEventListener("error", (event) => {
+  const note = document.createElement("pre");
+  note.id = "crash";
+  note.textContent = event.message;
+  document.body.prepend(note);
+});
+
+bestEl.textContent = String(best);
+renderRanks();
+window.__debug = {
+  move(dir) { tryMove(dir); },
+  state() {
+    return {
+      score, meter, rule: currentRule, turnsLeft, lastDir, over, rebel, busy,
+      board: board.map((row) => row.map((cell) => (cell ? cell.value : 0))),
+    };
+  },
+  setBoard(rows) {
+    epoch += 1;
+    busy = false;
+    queued = null;
+    over = false;
+    board = rows.map((row) => row.map((value) => (value ? { id: nextId++, value } : null)));
+    overlayEl.hidden = true;
+    render();
+  },
+  force(rule) {
+    currentRule = rule;
+    lastRule = rule;
+    rebel = 0;
+    turnsLeft = RULES[rule].turns;
+    meter = 100;
+    paintEffect();
+    splash(`${RULES[rule].name}！`);
+    render();
+    updateMeter();
+  },
+};
+newGame();
+requestAnimationFrame(function frame(now) {
+  updateMeter(now);
+  requestAnimationFrame(frame);
+});
+</script>
+</body>
+</html>
