@@ -122,13 +122,15 @@
     background: var(--board);
     border-radius: 8px;
     padding: var(--gap);
+    --n: 4;
+    --gaps: 30px;
   }
   body.fever #board { box-shadow: 0 0 0 4px rgba(255, 90, 30, .45); }
   body.good #board { box-shadow: 0 0 0 4px rgba(240, 180, 40, .55); }
   #board.shake { animation: shake .45s linear; }
   .grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(var(--n), 1fr);
     gap: var(--gap);
     height: 100%;
   }
@@ -147,15 +149,29 @@
   }
   .tile {
     position: absolute;
-    width: calc((100% - 30px) / 4);
-    height: calc((100% - 30px) / 4);
+    width: calc((100% - var(--gaps)) / var(--n));
+    height: calc((100% - var(--gaps)) / var(--n));
     border-radius: 4px;
     display: grid;
     place-items: center;
     font-weight: 800;
     transition: left .12s ease, top .12s ease;
   }
-  .tile.pop { animation: pop .16s ease; }
+  .tile.wild { box-shadow: inset 0 0 0 3px rgba(255,255,255,.75); }
+  .tile.ice { box-shadow: inset 0 0 0 3px rgba(255,255,255,.85); }
+  .tile.ice.cracked { box-shadow: inset 0 0 0 3px #7fb8d6; }
+  .tile.chili { box-shadow: inset 0 0 0 3px #ffd0b0; }
+  .tile.hole { box-shadow: inset 0 0 0 3px #ffb088; }
+  .tile .mark {
+    position: absolute;
+    right: 3px;
+    bottom: 1px;
+    font-size: 10px;
+    font-weight: 800;
+    font-style: normal;
+    opacity: .9;
+  }
+  #board.rescue { animation: shake .22s linear infinite; }
   .tile.born { animation: born .12s ease; }
   .tile.gone { opacity: 0; transform: scale(.55); transition: left .12s ease, top .12s ease, opacity .12s ease, transform .12s ease; }
   #board.fx-slow .tile { transition-duration: .32s; }
@@ -373,10 +389,17 @@
     <p id="rank-empty">还没有记录。一局结束之后可以留下 ID。</p>
     <ol id="rank-list" class="rank-list"></ol>
   </section>
-  <p class="later">还没放进来：2048 裂开后棋盘变大、问号 / 冰 / 辣椒 / 黑洞、满格抢救。</p>
+  <ul class="rules extra">
+    <li><b>问号</b>　能和任何数字合，结果升一级</li>
+    <li><b>冰</b>　要撞两次才合得动</li>
+    <li><b>辣椒</b>　它一动，这一滑会再来一次</li>
+    <li><b>黑洞</b>　吞掉滑进来的块，吐出一半</li>
+    <li><b>裂开</b>　合出目标后分成两半，棋盘从 4 格涨到 5 格、6 格</li>
+    <li><b>抢救</b>　满了还有 3 秒，再滑一次，最小的一块会碎掉</li>
+  </ul>
 </div>
 <script>
-const SIZE = 4;
+let size = 4;
 const FEVER_PER_MERGE = 25;
 const MOVE_MS = 140;
 const DIRS = ["left", "right", "up", "down"];
@@ -437,20 +460,30 @@ let busy = false;
 let queued = null;
 let epoch = 0;
 let peak = 0;
+let rescueUntil = 0;
+let rescueSpent = false;
 
 function emptyBoard() {
-  return Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
+  return Array.from({ length: size }, () => Array(size).fill(null));
 }
 function opposite(dir) {
   return { left: "right", right: "left", up: "down", down: "up" }[dir];
 }
 function sig(src) {
   let s = "";
-  for (const row of src) for (const cell of row) s += (cell ? cell.value : 0) + ",";
+  for (const row of src) {
+    for (const cell of row) s += cell ? `${cell.kind || "num"}:${cell.value}:${cell.iceHits || 0},` : ".,";
+  }
   return s;
 }
 function cloneBoard(src) {
-  return src.map((row) => row.map((cell) => (cell ? { id: cell.id, value: cell.value, merged: false } : null)));
+  return src.map((row) => row.map((cell) => (cell ? {
+    id: cell.id,
+    value: cell.value,
+    kind: cell.kind || "num",
+    iceHits: cell.iceHits || 0,
+    merged: false,
+  } : null)));
 }
 function frontKey(r, c, dir) {
   if (dir === "left") return c;
@@ -460,8 +493,8 @@ function frontKey(r, c, dir) {
 }
 function lineCoords(axis, index, toward) {
   const coords = [];
-  for (let k = 0; k < SIZE; k++) {
-    const step = toward === "left" || toward === "up" ? k : SIZE - 1 - k;
+  for (let k = 0; k < size; k++) {
+    const step = toward === "left" || toward === "up" ? k : size - 1 - k;
     coords.push(axis === "h" ? { r: index, c: step } : { r: step, c: index });
   }
   return coords;
@@ -469,19 +502,48 @@ function lineCoords(axis, index, toward) {
 function bumped(value, fever) {
   return fever ? value * 4 : value * 2;
 }
+function pairAction(a, b) {
+  const ak = a.kind || "num";
+  const bk = b.kind || "num";
+  if (ak === "hole" || bk === "hole") return "swallow";
+  const iceLocked = (ak === "ice" && !a.iceHits) || (bk === "ice" && !b.iceHits);
+  if (iceLocked && ak !== "wild" && bk !== "wild" && a.value && a.value === b.value) return "crack";
+  if (ak === "wild" || bk === "wild") return "wild";
+  if (a.value && a.value === b.value) return "merge";
+  return "";
+}
+function combine(keeper, victim, fever, action) {
+  if (action === "swallow") {
+    const keeperHole = (keeper.kind === "hole");
+    const hole = keeperHole ? keeper : victim;
+    const meal = keeperHole ? victim : keeper;
+    hole.merged = true;
+    return { keep: hole, eaten: meal, swallowed: meal.value || 2, score: 0, merged: false };
+  }
+  const keeperKind = keeper.kind || "num";
+  const victimKind = victim.kind || "num";
+  const value = action === "wild"
+    ? (keeperKind === "wild" && victimKind === "wild" ? 4 : bumped(keeperKind === "wild" ? victim.value : keeper.value, fever))
+    : bumped(keeper.value, fever);
+  keeper.value = value;
+  keeper.kind = "num";
+  keeper.iceHits = 0;
+  keeper.merged = true;
+  return { keep: keeper, eaten: victim, swallowed: 0, score: value, merged: true };
+}
 
 function diagonalMerge(target, dir, fever) {
   const pairs = [];
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
       const a = target[r][c];
       if (!a) continue;
       for (const [dr, dc] of [[1, 1], [1, -1]]) {
         const nr = r + dr;
         const nc = c + dc;
-        if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
+        if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
         const b = target[nr][nc];
-        if (!b || a.value !== b.value) continue;
+        if (!b || !pairAction(a, b)) continue;
         pairs.push({ r, c, nr, nc, front: Math.min(frontKey(r, c, dir), frontKey(nr, nc, dir)) });
       }
     }
@@ -489,38 +551,46 @@ function diagonalMerge(target, dir, fever) {
   pairs.sort((a, b) => a.front - b.front);
   const dead = new Set();
   const eaten = [];
+  const swallowed = [];
   let gained = 0;
   let merges = 0;
   for (const pair of pairs) {
     const a = target[pair.r][pair.c];
     const b = target[pair.nr][pair.nc];
-    if (!a || !b || dead.has(a.id) || dead.has(b.id) || a.value !== b.value) continue;
+    if (!a || !b || dead.has(a.id) || dead.has(b.id)) continue;
+    const action = pairAction(a, b);
+    if (!action || action === "crack") {
+      if (action === "crack") {
+        const ice = (a.kind === "ice" ? a : b);
+        ice.iceHits = 1;
+      }
+      continue;
+    }
     const keepA = frontKey(pair.r, pair.c, dir) <= frontKey(pair.nr, pair.nc, dir);
     const kr = keepA ? pair.r : pair.nr;
     const kc = keepA ? pair.c : pair.nc;
     const vr = keepA ? pair.nr : pair.r;
     const vc = keepA ? pair.nc : pair.c;
-    const keeper = target[kr][kc];
-    const victim = target[vr][vc];
-    keeper.value = bumped(keeper.value, fever);
-    keeper.merged = true;
+    const result = combine(target[kr][kc], target[vr][vc], fever, action);
+    if (result.swallowed) swallowed.push(result.swallowed);
+    target[kr][kc] = result.keep;
     target[vr][vc] = null;
-    dead.add(keeper.id);
-    dead.add(victim.id);
+    dead.add(result.keep.id);
+    dead.add(result.eaten.id);
     eaten.push({
-      victimId: victim.id,
-      keeperId: keeper.id,
-      value: keeper.value,
+      victimId: result.eaten.id,
+      keeperId: result.keep.id,
+      value: result.keep.value || result.swallowed,
       diagonal: true,
       fromR: vr,
       fromC: vc,
       keeperR: kr,
       keeperC: kc,
     });
-    gained += keeper.value;
-    merges += 1;
+    gained += result.score;
+    if (result.merged) merges += 1;
   }
-  return { score: gained, merges, eaten };
+  return { score: gained, merges, eaten, swallowed };
 }
 
 function slideLine(target, coords, fever) {
@@ -528,30 +598,41 @@ function slideLine(target, coords, fever) {
   for (const spot of coords) if (target[spot.r][spot.c]) present.push(target[spot.r][spot.c]);
   const out = [];
   const eaten = [];
+  const swallowed = [];
   let gained = 0;
   let merges = 0;
   for (let i = 0; i < present.length; i++) {
     const cur = present[i];
     const nxt = present[i + 1];
-    if (nxt && !cur.merged && !nxt.merged && cur.value === nxt.value) {
-      cur.value = bumped(cur.value, fever);
-      cur.merged = true;
-      eaten.push({ victimId: nxt.id, keeperId: cur.id, value: cur.value, diagonal: false });
+    const action = nxt && !cur.merged && !nxt.merged ? pairAction(cur, nxt) : "";
+    if (action === "crack") {
+      const ice = cur.kind === "ice" ? cur : nxt;
+      ice.iceHits = 1;
       out.push(cur);
-      gained += cur.value;
-      merges += 1;
+    } else if (action === "merge" || action === "wild" || action === "swallow") {
+      const result = combine(cur, nxt, fever, action);
+      if (result.swallowed) swallowed.push(result.swallowed);
+      if (result.merged) {
+        eaten.push({ victimId: nxt.id, keeperId: result.keep.id, value: result.keep.value, diagonal: false });
+        gained += result.score;
+        merges += 1;
+      } else {
+        eaten.push({ victimId: result.eaten.id, keeperId: result.keep.id, value: result.swallowed, diagonal: false });
+      }
+      out.push(result.keep);
       i += 1;
     } else {
       out.push(cur);
     }
   }
   for (let i = 0; i < coords.length; i++) target[coords[i].r][coords[i].c] = out[i] || null;
-  return { score: gained, merges, eaten };
+  return { score: gained, merges, eaten, swallowed };
 }
 
 function applyMove(src, dir, ctx) {
   const target = cloneBoard(src);
   const eaten = [];
+  const swallowed = [];
   let gained = 0;
   let merges = 0;
   if (ctx.rule === "diagonal") {
@@ -559,18 +640,29 @@ function applyMove(src, dir, ctx) {
     gained += part.score;
     merges += part.merges;
     eaten.push(...part.eaten);
+    swallowed.push(...part.swallowed);
   }
   const axis = dir === "left" || dir === "right" ? "h" : "v";
-  for (let i = 0; i < SIZE; i++) {
+  for (let i = 0; i < size; i++) {
     const toward = ctx.rule === "antigrav" && i === ctx.rebel ? opposite(dir) : dir;
     const part = slideLine(target, lineCoords(axis, i, toward), ctx.fever);
     gained += part.score;
     merges += part.merges;
     eaten.push(...part.eaten);
+    swallowed.push(...part.swallowed);
+  }
+  for (const value of swallowed) {
+    const half = value >= 4 ? value / 2 : 0;
+    if (!half) continue;
+    const spots = [];
+    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) if (!target[r][c]) spots.push([r, c]);
+    if (!spots.length) break;
+    const [r, c] = spots[Math.floor(Math.random() * spots.length)];
+    target[r][c] = { id: nextId++, kind: "num", value: half, fresh: true };
   }
   const at = new Map();
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) if (target[r][c]) at.set(target[r][c].id, { r, c });
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) if (target[r][c]) at.set(target[r][c].id, { r, c });
   }
   const ghosts = [];
   for (const item of eaten) {
@@ -588,7 +680,25 @@ function applyMove(src, dir, ctx) {
       keeperC: item.keeperC,
     });
   }
-  return { board: target, score: gained, merges, changed: sig(src) !== sig(target), ghosts };
+  return { board: target, score: gained, merges, changed: sig(src) !== sig(target), ghosts, chiliMoved: chiliShifted(src, target) };
+}
+
+function chiliShifted(src, target) {
+  const after = new Map();
+  for (let r = 0; r < target.length; r++) {
+    for (let c = 0; c < target[r].length; c++) {
+      const cell = target[r][c];
+      if (cell && cell.kind === "chili") after.set(cell.id, `${r},${c}`);
+    }
+  }
+  for (let r = 0; r < src.length; r++) {
+    for (let c = 0; c < src[r].length; c++) {
+      const cell = src[r][c];
+      if (!cell || cell.kind !== "chili") continue;
+      if (after.get(cell.id) !== `${r},${c}`) return true;
+    }
+  }
+  return false;
 }
 
 function play(src, dir, state) {
@@ -617,10 +727,21 @@ function play(src, dir, state) {
 
 function spawn(target) {
   const spots = [];
-  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) if (!target[r][c]) spots.push([r, c]);
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) if (!target[r][c]) spots.push([r, c]);
   if (!spots.length) return false;
   const [r, c] = spots[Math.floor(Math.random() * spots.length)];
-  target[r][c] = { id: nextId++, value: Math.random() < 0.9 ? 2 : 4, fresh: true };
+  const roll = Math.random();
+  const specialP = size === 4 ? 0.05 : size === 5 ? 0.14 : 0.24;
+  let tile;
+  if (roll < specialP) {
+    const kind = ["wild", "ice", "chili", "hole"][Math.floor(Math.random() * 4)];
+    tile = kind === "wild" || kind === "hole"
+      ? { id: nextId++, kind, value: 0, fresh: true }
+      : { id: nextId++, kind, value: Math.random() < 0.8 ? 2 : 4, iceHits: 0, fresh: true };
+  } else {
+    tile = { id: nextId++, kind: "num", value: roll < specialP + (size === 4 ? 0.1 : 0.16) ? 4 : 2, fresh: true };
+  }
+  target[r][c] = tile;
   return true;
 }
 function maxTile(src) {
@@ -742,13 +863,103 @@ function canAnyMove() {
   return DIRS.some((dir) => play(board, dir, state).changed);
 }
 function checkOver() {
-  over = !canAnyMove();
+  if (canAnyMove()) {
+    rescueUntil = 0;
+    rescueSpent = false;
+    over = false;
+    boardEl.classList.remove("rescue");
+    return;
+  }
+  if (rescueUntil && performance.now() < rescueUntil) {
+    over = false;
+    return;
+  }
+  if (!rescueSpent && !rescueUntil) {
+    rescueUntil = performance.now() + 3000;
+    boardEl.classList.add("rescue");
+    splash("抢救");
+    setStatus("棋盘满了。3 秒内再滑一次，最小的一块会碎掉。");
+    over = false;
+    return;
+  }
+  over = true;
+  rescueUntil = 0;
+  boardEl.classList.remove("rescue");
+}
+function layoutBoard() {
+  boardEl.style.setProperty("--n", String(size));
+  boardEl.style.setProperty("--gaps", `${(size - 1) * 10}px`);
+  gridEl.replaceChildren();
+  for (let i = 0; i < size * size; i++) {
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    gridEl.appendChild(cell);
+  }
+}
+function growBoard() {
+  const next = Array.from({ length: size + 1 }, () => Array(size + 1).fill(null));
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) next[r][c] = board[r][c];
+  size += 1;
+  board = next;
+  layoutBoard();
+}
+function crackOversized() {
+  const goal = size >= 6 ? 0 : size === 4 ? 2048 : 4096;
+  if (!goal) return false;
+  const halves = [];
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const tile = board[r][c];
+      if (!tile || (tile.kind && tile.kind !== "num") || tile.value < goal) continue;
+      tile.value /= 2;
+      halves.push(tile.value);
+    }
+  }
+  if (!halves.length) return false;
+  if (size < 6) growBoard();
+  for (const value of halves) {
+    const spots = [];
+    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) if (!board[r][c]) spots.push([r, c]);
+    if (!spots.length) break;
+    const [r, c] = spots[Math.floor(Math.random() * spots.length)];
+    board[r][c] = { id: nextId++, kind: "num", value, fresh: true };
+  }
+  return true;
+}
+function removeSmallest(target) {
+  let best = null;
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const tile = target[r][c];
+      if (!tile) continue;
+      const rank = tile.kind === "wild" || tile.kind === "hole" ? 99999 : tile.value;
+      if (!best || rank < best.rank) best = { r, c, rank };
+    }
+  }
+  if (!best) return false;
+  target[best.r][best.c] = null;
+  return true;
 }
 function pos(i) {
-  return `calc(${i} * ((100% - 30px) / 4 + 10px))`;
+  return `calc(${i} * ((100% - var(--gaps)) / var(--n) + 10px))`;
 }
-function tileLook(value) {
-  if (TILES[value]) return TILES[value];
+function tileText(tile) {
+  if (tile.kind === "wild") return "?";
+  if (tile.kind === "hole") return "●";
+  return tile.value;
+}
+function tileMark(tile) {
+  if (tile.kind === "ice") return "冰";
+  if (tile.kind === "chili") return "辣";
+  return "";
+}
+function tileLook(tile) {
+  const kind = tile.kind || "num";
+  if (kind === "wild") return ["#6d5ef5", "#fffaf5"];
+  if (kind === "hole") return ["#241c19", "#ffb088"];
+  if (kind === "chili") return ["#ff5a36", "#fff7ef"];
+  if (kind === "ice") return [tile.iceHits ? "#e7f7ff" : "#b9e6fb", "#24566e"];
+  if (TILES[tile.value]) return TILES[tile.value];
   return ["#3c3a32", "#f9f6f2"];
 }
 function fontSize(value) {
@@ -773,7 +984,7 @@ function startEffect() {
   currentRule = pool[Math.floor(Math.random() * pool.length)];
   const rule = RULES[currentRule];
   lastRule = currentRule;
-  rebel = Math.floor(Math.random() * SIZE);
+  rebel = Math.floor(Math.random() * size);
   turnsLeft = rule.turns;
   meter = 100;
   paintEffect();
@@ -804,11 +1015,12 @@ function charge(merges) {
 
 function point(r, c) {
   const box = effectsEl.getBoundingClientRect();
-  const size = (box.width - 30) / 4;
+  const gaps = (size - 1) * 10;
+  const cell = (box.width - gaps) / size;
   return {
-    x: c * (size + 10) + size / 2,
-    y: r * (size + 10) + size / 2,
-    size,
+    x: c * (cell + 10) + cell / 2,
+    y: r * (cell + 10) + cell / 2,
+    size: cell,
   };
 }
 function clearJuice() {
@@ -909,14 +1121,14 @@ function showDouble() {
 }
 function showBlank() {
   const empties = [];
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) if (!board[r][c]) empties.push([r, c]);
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) if (!board[r][c]) empties.push([r, c]);
   }
   if (!empties.length) return;
   const [r, c] = empties[Math.floor(Math.random() * empties.length)];
   const el = document.createElement("div");
   el.className = "tile ghost";
-  const [bg, fg] = tileLook(2);
+  const [bg, fg] = tileLook({ kind: "num", value: 2 });
   el.textContent = "2";
   el.style.background = bg;
   el.style.color = fg;
@@ -950,8 +1162,8 @@ function stampEcho() {
 function render(ghosts = []) {
   const ghostAt = new Map(ghosts.map((ghost) => [String(ghost.id), ghost]));
   const alive = new Set();
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
       const tile = board[r][c];
       if (!tile) continue;
       const id = String(tile.id);
@@ -964,11 +1176,19 @@ function render(ghosts = []) {
         el.dataset.id = id;
         tilesEl.appendChild(el);
       }
-      const [bg, fg] = tileLook(tile.value);
-      el.textContent = tile.value;
+      el.className = `tile ${tile.kind || "num"}${tile.kind === "ice" && tile.iceHits ? " cracked" : ""}`;
+      el.replaceChildren(document.createTextNode(tileText(tile)));
+      const mark = tileMark(tile);
+      if (mark) {
+        const badge = document.createElement("i");
+        badge.className = "mark";
+        badge.textContent = mark;
+        el.append(badge);
+      }
+      const [bg, fg] = tileLook(tile);
       el.style.background = bg;
       el.style.color = fg;
-      el.style.fontSize = fontSize(tile.value);
+      el.style.fontSize = fontSize(tile.kind === "wild" || tile.kind === "hole" ? 8 : tile.value);
       el.style.zIndex = "2";
       if (isNew || tile.fresh) {
         el.style.transition = "none";
@@ -977,7 +1197,7 @@ function render(ghosts = []) {
         el.classList.add("born");
         requestAnimationFrame(() => { el.style.transition = ""; });
       } else {
-        if (el.dataset.value !== String(tile.value)) {
+        if (el.dataset.value !== `${tile.kind || "num"}:${tile.value}:${tile.iceHits || 0}`) {
           el.classList.remove("pop");
           void el.offsetWidth;
           el.classList.add("pop");
@@ -986,7 +1206,7 @@ function render(ghosts = []) {
         el.style.left = pos(c);
         el.style.top = pos(r);
       }
-      el.dataset.value = String(tile.value);
+      el.dataset.value = `${tile.kind || "num"}:${tile.value}:${tile.iceHits || 0}`;
       tile.fresh = false;
     }
   }
@@ -1010,8 +1230,9 @@ function render(ghosts = []) {
     scoreEl.classList.add("bump");
   }
   bestEl.textContent = String(best);
+  const goal = size >= 6 ? 8192 : size === 5 ? 4096 : 2048;
   peak = Math.max(peak, maxTile(board));
-  peakEl.textContent = peak >= 2048 ? `这局到过 ${peak}` : "目标 2048";
+  peakEl.textContent = peak >= goal ? `这局到过 ${peak}` : `目标 ${goal}`;
   lastDirEl.textContent = lastDir ? `上一次的方向：${DIR_ARROW[lastDir]}` : "上一次的方向：还没有";
   const showRebel = currentRule === "antigrav";
   rowStripe.hidden = !showRebel;
@@ -1020,11 +1241,11 @@ function render(ghosts = []) {
     rowStripe.style.top = pos(rebel);
     rowStripe.style.left = "0";
     rowStripe.style.width = "100%";
-    rowStripe.style.height = "calc((100% - 30px) / 4)";
+    rowStripe.style.height = "calc((100% - var(--gaps)) / var(--n))";
     colStripe.style.left = pos(rebel);
     colStripe.style.top = "0";
     colStripe.style.height = "100%";
-    colStripe.style.width = "calc((100% - 30px) / 4)";
+    colStripe.style.width = "calc((100% - var(--gaps)) / var(--n))";
   }
   for (const li of document.querySelectorAll(".rules li")) {
     li.classList.toggle("on", li.dataset.rule === currentRule);
@@ -1039,6 +1260,17 @@ function render(ghosts = []) {
 }
 
 function updateMeter() {
+  if (rescueUntil && performance.now() >= rescueUntil) {
+    rescueUntil = 0;
+    rescueSpent = true;
+    checkOver();
+    render();
+  }
+  if (rescueUntil) {
+    const left = Math.max(0, rescueUntil - performance.now());
+    timerEl.textContent = `抢救 ${(left / 1000).toFixed(1)} 秒 · 再滑一次，最小的一块会碎`;
+    return;
+  }
   if (effectActive()) {
     const rule = RULES[currentRule];
     meterBar.style.transition = "none";
@@ -1056,6 +1288,11 @@ function finishMove(my, merges, effectOn, gained) {
   if (effectOn && currentRule === "double" && gained > 0) {
     score += gained;
     showDouble();
+  }
+  peak = Math.max(peak, maxTile(board));
+  if (crackOversized()) {
+    splash("裂开");
+    flashBoard("rgba(255, 210, 90, .45)");
   }
   if (effectOn && currentRule === "blank") showBlank();
   else spawn(board);
@@ -1089,21 +1326,31 @@ function commitMove(dir) {
   const effectOn = effectActive();
   const tier = effectOn && currentRule === "boost";
   const scoreAtStart = score;
+  let forced = false;
+  if (rescueUntil) {
+    forced = removeSmallest(board);
+    rescueUntil = 0;
+    rescueSpent = true;
+    boardEl.classList.remove("rescue");
+  }
   const opening = applyMove(board, dir, {
     rule: currentRule === "echo" ? null : currentRule,
     rebel,
     fever: tier,
   });
-  if (!opening.changed) return false;
+  if (!opening.changed && !forced) return false;
   const my = epoch;
-  const echoDir = effectOn && currentRule === "echo" ? (lastDir || dir) : null;
-  const step = effectOn ? 340 : MOVE_MS;
+  let chiliDir = opening.chiliMoved ? dir : null;
+  let echoDir = effectOn && currentRule === "echo" ? (lastDir || dir) : null;
+  const step = effectOn || chiliDir ? 340 : MOVE_MS;
   const rule = effectOn ? currentRule : null;
   busy = true;
-  boardEl.classList.toggle("fx-slow", effectOn);
+  boardEl.classList.toggle("fx-slow", effectOn || Boolean(chiliDir));
   clearJuice();
-  board = opening.board;
-  score += opening.score;
+  if (opening.changed) {
+    board = opening.board;
+    score += opening.score;
+  }
   lastDir = dir;
   render(opening.ghosts);
   playJuice(rule, opening.ghosts);
@@ -1111,24 +1358,43 @@ function commitMove(dir) {
     const gained = score - scoreAtStart;
     finishMove(my, merges, effectOn, gained);
   };
-  setTimeout(() => {
-    if (my !== epoch) return;
+  const afterEcho = (mergesSoFar) => {
     if (!echoDir) {
-      finish(opening.merges);
+      finish(mergesSoFar);
       return;
     }
-    const second = applyMove(board, echoDir, { rule: null, rebel, fever: tier });
-    if (!second.changed) {
-      finish(opening.merges);
+    const echoSlide = applyMove(board, echoDir, { rule: null, rebel, fever: tier });
+    echoDir = null;
+    if (!echoSlide.changed) {
+      finish(mergesSoFar);
       return;
     }
     stampEcho();
+    board = echoSlide.board;
+    score += echoSlide.score;
+    render(echoSlide.ghosts);
+    setTimeout(() => {
+      if (my === epoch) finish(mergesSoFar + echoSlide.merges);
+    }, step);
+  };
+  setTimeout(() => {
+    if (my !== epoch) return;
+    if (!chiliDir) {
+      afterEcho(opening.merges);
+      return;
+    }
+    const second = applyMove(board, chiliDir, { rule: null, rebel, fever: tier });
+    chiliDir = null;
+    if (!second.changed) {
+      afterEcho(opening.merges);
+      return;
+    }
+    floatText(0, 0, "辣");
     board = second.board;
     score += second.score;
     render(second.ghosts);
     setTimeout(() => {
-      if (my !== epoch) return;
-      finish(opening.merges + second.merges);
+      if (my === epoch) afterEcho(opening.merges + second.merges);
     }, step);
   }, step);
   return true;
@@ -1139,6 +1405,8 @@ function newGame() {
   busy = false;
   queued = null;
   nextId = 1;
+  size = 4;
+  layoutBoard();
   board = emptyBoard();
   score = 0;
   meter = 0;
@@ -1148,6 +1416,9 @@ function newGame() {
   lastDir = null;
   over = false;
   peak = 0;
+  rescueUntil = 0;
+  rescueSpent = false;
+  boardEl.classList.remove("rescue");
   paintEffect();
   clearJuice();
   scoreEl.classList.remove("double-pop", "bump");
@@ -1263,8 +1534,9 @@ window.__debug = {
   move(dir) { tryMove(dir); },
   state() {
     return {
-      score, meter, rule: currentRule, turnsLeft, lastDir, over, rebel, busy,
+      score, meter, rule: currentRule, turnsLeft, lastDir, over, rebel, busy, size,
       board: board.map((row) => row.map((cell) => (cell ? cell.value : 0))),
+      kinds: board.map((row) => row.map((cell) => (cell ? cell.kind || "num" : ""))),
     };
   },
   setBoard(rows) {
@@ -1272,8 +1544,21 @@ window.__debug = {
     busy = false;
     queued = null;
     over = false;
-    board = rows.map((row) => row.map((value) => (value ? { id: nextId++, value } : null)));
+    rescueUntil = 0;
+    rescueSpent = false;
+    size = rows.length;
+    layoutBoard();
+    board = rows.map((row) => row.map((value) => (value ? { id: nextId++, kind: "num", value } : null)));
     overlayEl.hidden = true;
+    render();
+  },
+  setTile(r, c, spec) {
+    board[r][c] = spec ? {
+      id: nextId++,
+      kind: spec.kind || "num",
+      value: spec.value || 0,
+      iceHits: spec.iceHits || 0,
+    } : null;
     render();
   },
   force(rule) {

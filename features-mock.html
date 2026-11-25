@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2048 狂热 · 新功能特效</title>
+<style>
+  :root { --ink: #776e65; --gap: 8px; --pad: 8px; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    padding: 28px 20px 48px;
+    background: #faf8ef;
+    color: var(--ink);
+    font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  header.top { max-width: 1080px; margin: 0 auto 18px; }
+  h1 { margin: 0; font-size: 32px; letter-spacing: -.5px; }
+  h1 em { font-style: normal; font-size: 14px; color: #fffaf5; background: #f65e3b; border-radius: 999px; padding: 3px 8px; vertical-align: 6px; }
+  .top p { margin: 8px 0 0; max-width: 42em; line-height: 1.5; }
+  .gallery { max-width: 1080px; margin: 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .card { background: #fffaf3; border-radius: 14px; padding: 14px; box-shadow: inset 0 0 0 2px rgba(120, 90, 60, .16), 0 8px 24px rgba(80, 60, 40, .06); }
+  .card h2 { margin: 0; font-size: 20px; display: flex; justify-content: space-between; align-items: baseline; }
+  .card h2 span { font-size: 12px; color: #a06a32; }
+  .caption { min-height: 2.8em; margin: 8px 0 10px; font-size: 13px; line-height: 1.45; }
+  .hud { height: 26px; margin-bottom: 8px; font-size: 13px; font-weight: 800; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #8f7a66; color: white; opacity: 0; }
+  .board { width: min(100%, 280px); aspect-ratio: 1; margin: 0 auto; position: relative; background: #bbada0; border-radius: 8px; overflow: hidden; }
+  .cells, .layer, .fx { position: absolute; inset: var(--pad); }
+  .cells { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
+  .cell { background: #cdc1b4; border-radius: 4px; }
+  .layer, .fx { pointer-events: none; }
+  .layer { z-index: 2; }
+  .fx { z-index: 3; }
+  .tile { position: absolute; border-radius: 4px; display: grid; place-items: center; font-weight: 800; font-size: 26px; }
+  .tile i { position: absolute; right: 4px; bottom: 2px; font-size: 10px; font-style: normal; }
+  .wild { background: #6d5ef5; color: white; box-shadow: inset 0 0 0 3px rgba(255,255,255,.7); }
+  .ice { background: #b9e6fb; color: #24566e; box-shadow: inset 0 0 0 3px white; }
+  .ice.cracked { background: #e7f7ff; box-shadow: inset 0 0 0 3px #7fb8d6; }
+  .chili { background: #ff5a36; color: white; }
+  .hole { background: #241c19; color: #ffb088; font-size: 30px; }
+  .ghost { opacity: .45; }
+  .spark { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; }
+  .float { position: absolute; z-index: 5; font-weight: 900; font-size: 22px; color: #fffaf3; -webkit-text-stroke: 5px #c47d00; paint-order: stroke fill; white-space: nowrap; }
+  .flash { position: absolute; inset: 0; }
+  button.replay { margin-top: 10px; border: 0; background: #8f7a66; color: #fffaf3; font: inherit; font-weight: 800; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+  @media (max-width: 900px) { .gallery { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>新功能特效 <em>预览</em></h1>
+  <p>裂开、问号、冰、辣椒、黑洞、抢救。规则已经进游戏，这页只看画面。要改哪几个，直接说。</p>
+</header>
+<main class="gallery" id="gallery"></main>
+<script>
+const NUM = { 2: ["#eee4da", "#776e65"], 4: ["#ede0c8", "#776e65"], 8: ["#f2b179", "#fff"], 16: ["#f59563", "#fff"], 32: ["#f67c5f", "#fff"], 64: ["#f65e3b", "#fff"], 1024: ["#edc53f", "#fff"], 2048: ["#edc22e", "#fff"] };
+const DEMOS = [
+  { id: "crack", name: "裂开", meta: "目标达成", caption: "2048 裂成两块 1024，棋盘从四格涨到五格。" },
+  { id: "wild", name: "问号", meta: "怪棋", caption: "问号撞上 8，不比数字，直接升成 16。" },
+  { id: "ice", name: "冰", meta: "怪棋", caption: "第一下只把冰敲裂，第二下才合成。" },
+  { id: "chili", name: "辣椒", meta: "怪棋", caption: "辣椒一动，同一方向马上再滑一次。" },
+  { id: "hole", name: "黑洞", meta: "怪棋", caption: "16 滑进去被吞掉，旁边吐出一块 8。" },
+  { id: "rescue", name: "抢救", meta: "满格", caption: "棋盘猛晃，最小的 2 碎掉，再滑出空位。" },
+];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function metrics(board) {
+  const size = (board.clientWidth - 16 - 24) / 4;
+  return { size, at: (r, c) => ({ x: c * (size + 8), y: r * (size + 8), size }) };
+}
+function put(board, el, r, c) {
+  const { x, y, size } = metrics(board).at(r, c);
+  el.style.width = el.style.height = `${size}px`;
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
+}
+function num(board, value, r, c, extra = "") {
+  const el = document.createElement("div");
+  el.className = `tile ${extra}`;
+  const color = NUM[value];
+  if (color) { el.style.background = color[0]; el.style.color = color[1]; }
+  el.textContent = value;
+  put(board, el, r, c);
+  return el;
+}
+function special(board, cls, text, r, c, mark) {
+  const el = document.createElement("div");
+  el.className = `tile ${cls}`;
+  el.textContent = text;
+  if (mark) {
+    const i = document.createElement("i");
+    i.textContent = mark;
+    el.append(i);
+  }
+  put(board, el, r, c);
+  return el;
+}
+async function glide(board, el, r, c, ms = 420) {
+  const box = board.getBoundingClientRect();
+  const from = el.getBoundingClientRect();
+  el.style.transition = "none";
+  el.style.left = `${from.left - box.left - 8}px`;
+  el.style.top = `${from.top - box.top - 8}px`;
+  await el.offsetWidth;
+  const to = metrics(board).at(r, c);
+  el.style.transition = `left ${ms}ms cubic-bezier(.2,.8,.2,1), top ${ms}ms cubic-bezier(.2,.8,.2,1)`;
+  el.style.left = `${to.x}px`;
+  el.style.top = `${to.y}px`;
+  await sleep(ms);
+}
+function pop(el) {
+  el.animate([{ transform: "scale(1)" }, { transform: "scale(1.24)" }, { transform: "scale(1)" }], { duration: 420 });
+}
+function burst(fx, board, r, c, color) {
+  const spot = metrics(board).at(r, c);
+  const cx = spot.x + spot.size / 2;
+  const cy = spot.y + spot.size / 2;
+  for (let i = 0; i < 12; i++) {
+    const spark = document.createElement("i");
+    spark.className = "spark";
+    spark.style.background = color;
+    spark.style.left = `${cx}px`;
+    spark.style.top = `${cy}px`;
+    fx.appendChild(spark);
+    const angle = (Math.PI * 2 * i) / 12;
+    const dist = 24 + (i % 3) * 10;
+    spark.animate([
+      { transform: "translate(0,0)", opacity: 1 },
+      { transform: `translate(${Math.cos(angle) * dist}px, ${Math.sin(angle) * dist}px)`, opacity: 0 },
+    ], { duration: 520, fill: "forwards" }).finished.then(() => spark.remove());
+  }
+}
+function floatText(fx, board, r, c, text) {
+  const spot = metrics(board).at(r, c);
+  const el = document.createElement("div");
+  el.className = "float";
+  el.textContent = text;
+  el.style.left = `${spot.x}px`;
+  el.style.top = `${spot.y}px`;
+  fx.appendChild(el);
+  el.animate([
+    { opacity: 0, transform: "translateY(6px)" },
+    { opacity: 1, transform: "translateY(-8px)" },
+    { opacity: 0, transform: "translateY(-28px)" },
+  ], { duration: 800, fill: "forwards" }).finished.then(() => el.remove());
+}
+function flash(fx, color) {
+  const el = document.createElement("div");
+  el.className = "flash";
+  el.style.background = color;
+  fx.appendChild(el);
+  el.animate([{ opacity: 0 }, { opacity: .5 }, { opacity: 0 }], { duration: 420 }).finished.then(() => el.remove());
+}
+function showTag(tag, text) {
+  tag.textContent = text;
+  tag.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, fill: "forwards" });
+}
+const plays = {
+  async crack(v) {
+    const tile = num(v.board, 2048, 1, 1);
+    v.layer.append(tile);
+    showTag(v.tag, "2048");
+    await sleep(280);
+    tile.animate([{ transform: "scale(1)" }, { transform: "scale(1.2) rotate(-6deg)" }, { transform: "scale(.7)" }], { duration: 420 });
+    flash(v.fx, "rgba(255,220,80,.55)");
+    await sleep(420);
+    tile.remove();
+    const a = num(v.board, 1024, 1, 1);
+    const b = num(v.board, 1024, 1, 2);
+    v.layer.append(a, b);
+    pop(a); pop(b);
+    burst(v.fx, v.board, 1, 1, "#ffe08a");
+    floatText(v.fx, v.board, 0, 1, "裂开");
+    v.board.animate([{ transform: "scale(1)" }, { transform: "scale(1.06)" }, { transform: "scale(1)" }], { duration: 500 });
+    showTag(v.tag, "两块 1024");
+    await sleep(1100);
+  },
+  async wild(v) {
+    const q = special(v.board, "wild", "?", 0, 0);
+    const n = num(v.board, 8, 0, 3);
+    v.layer.append(q, n);
+    showTag(v.tag, "问号撞 8");
+    await sleep(240);
+    await glide(v.board, n, 0, 0);
+    n.remove();
+    q.remove();
+    const out = num(v.board, 16, 0, 0);
+    v.layer.append(out);
+    pop(out);
+    burst(v.fx, v.board, 0, 0, "#d9d4ff");
+    floatText(v.fx, v.board, 0, 1, "16");
+    await sleep(1000);
+  },
+  async ice(v) {
+    const ice = special(v.board, "ice", "8", 1, 0, "冰");
+    const other = num(v.board, 8, 1, 3);
+    v.layer.append(ice, other);
+    showTag(v.tag, "第一下");
+    await sleep(200);
+    await glide(v.board, other, 1, 1, 360);
+    ice.classList.add("cracked");
+    flash(v.fx, "rgba(190,230,255,.45)");
+    floatText(v.fx, v.board, 0, 1, "裂了");
+    await sleep(700);
+    showTag(v.tag, "第二下");
+    await glide(v.board, other, 1, 0, 320);
+    other.remove();
+    ice.remove();
+    const merged = num(v.board, 16, 1, 0);
+    v.layer.append(merged);
+    pop(merged);
+    burst(v.fx, v.board, 1, 0, "#b9e6fb");
+    await sleep(900);
+  },
+  async chili(v) {
+    const hot = special(v.board, "chili", "2", 0, 0, "辣");
+    const side = num(v.board, 4, 2, 0);
+    v.layer.append(hot, side);
+    showTag(v.tag, "向右");
+    await sleep(180);
+    await Promise.all([glide(v.board, hot, 0, 1, 300), glide(v.board, side, 2, 1, 300)]);
+    showTag(v.tag, "再来一次");
+    flash(v.fx, "rgba(255,90,40,.3)");
+    const ghost = hot.cloneNode(true);
+    ghost.classList.add("ghost");
+    v.layer.append(ghost);
+    await Promise.all([glide(v.board, hot, 0, 2, 300), glide(v.board, side, 2, 2, 300)]);
+    ghost.remove();
+    floatText(v.fx, v.board, 0, 2, "辣");
+    await sleep(900);
+  },
+  async hole(v) {
+    const black = special(v.board, "hole", "●", 1, 0);
+    const meal = num(v.board, 16, 1, 3);
+    v.layer.append(black, meal);
+    showTag(v.tag, "吞进去");
+    await sleep(200);
+    await glide(v.board, meal, 1, 0, 420);
+    meal.remove();
+    pop(black);
+    burst(v.fx, v.board, 1, 0, "#ffb088");
+    await sleep(180);
+    const spit = num(v.board, 8, 3, 3);
+    v.layer.append(spit);
+    pop(spit);
+    floatText(v.fx, v.board, 2, 2, "吐出 8");
+    showTag(v.tag, "一半吐出来");
+    await sleep(1000);
+  },
+  async rescue(v) {
+    const tiles = [
+      num(v.board, 2, 0, 0), num(v.board, 4, 0, 1), num(v.board, 8, 0, 2), num(v.board, 16, 0, 3),
+      num(v.board, 32, 1, 0), num(v.board, 64, 1, 1), num(v.board, 128, 1, 2), num(v.board, 256, 1, 3),
+      num(v.board, 8, 2, 0), num(v.board, 4, 2, 1), num(v.board, 2, 2, 2), num(v.board, 16, 2, 3),
+      num(v.board, 4, 3, 0), num(v.board, 8, 3, 1), num(v.board, 32, 3, 2), num(v.board, 2, 3, 3),
+    ];
+    v.layer.append(...tiles);
+    showTag(v.tag, "满了");
+    v.board.animate([
+      { transform: "translateX(0)" },
+      { transform: "translateX(-4px) rotate(-.6deg)" },
+      { transform: "translateX(4px) rotate(.6deg)" },
+      { transform: "translateX(0)" },
+    ], { duration: 360 });
+    await sleep(380);
+    const small = tiles[14] ? tiles.find((el) => el.textContent === "2" && el.style.top.startsWith("0") === false) : tiles[0];
+    const victim = tiles[tiles.length - 1];
+    victim.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(1.3)", opacity: 0 }], { duration: 320, fill: "forwards" });
+    burst(v.fx, v.board, 3, 3, "#f2b179");
+    floatText(v.fx, v.board, 2, 2, "碎了");
+    showTag(v.tag, "最小的碎掉");
+    await sleep(1100);
+    void small;
+  },
+};
+function mount(card) {
+  const board = card.querySelector(".board");
+  const layer = card.querySelector(".layer");
+  const fx = card.querySelector(".fx");
+  layer.replaceChildren();
+  fx.replaceChildren();
+  return { board, layer, fx, tag: card.querySelector(".tag") };
+}
+function build(demo) {
+  const card = document.createElement("article");
+  card.className = "card";
+  card.innerHTML = `<h2>${demo.name}<span>${demo.meta}</span></h2><p class="caption">${demo.caption}</p><div class="hud"><span class="tag"></span></div><div class="board"><div class="cells"></div><div class="layer"></div><div class="fx"></div></div><button class="replay" type="button">再看一次</button>`;
+  const cells = card.querySelector(".cells");
+  for (let i = 0; i < 16; i++) cells.appendChild(Object.assign(document.createElement("div"), { className: "cell" }));
+  return card;
+}
+function loop(card, demo) {
+  let token = 0;
+  async function run(my) {
+    while (token === my) {
+      const view = mount(card);
+      await plays[demo.id](view);
+      if (token !== my) return;
+      view.tag.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, fill: "forwards" });
+      await sleep(400);
+    }
+  }
+  card.querySelector(".replay").addEventListener("click", () => { token += 1; run(token); });
+  run(token);
+}
+const gallery = document.getElementById("gallery");
+DEMOS.forEach((demo, index) => {
+  const card = build(demo);
+  gallery.appendChild(card);
+  setTimeout(() => loop(card, demo), index * 160);
+});
+</script>
+</body>
+</html>
